@@ -1,0 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Rubik+Bubbles&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Righteous&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,100..900;1,100..900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+@keyframes backgroundShift {
+  0% {
+    background-position: center center, 0 0, 0 0;
+  }
+  25% {
+    background-position: center center, 100px 50px, -100px -50px;
+  }
+  50% {
+    background-position: center center, 200px 100px, -200px -100px;
+  }
+  75% {
+    background-position: center center, 100px 50px, -100px -50px;
+  }
+  100% {
+    background-position: center center, 0 0, 0 0;
+  }
+}
