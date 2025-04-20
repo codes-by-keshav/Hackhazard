@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
-import { ToastContainer, toast } from 'react-toastify';
+// import { ToastContainer, toast } from 'react-toastify';
+import { toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
 const Navbar = ({ userAddress, balance }) => (
@@ -116,27 +117,39 @@ export default function HomePage() {
 
   // Connect wallet function
   const connectWallet = async () => {
+    console.log("Connect Wallet button clicked."); // Log 1: Button clicked
+
     if (walletAddress) {
-      // If wallet is already connected, show disconnect modal
+      console.log("Wallet already connected, opening disconnect modal."); // Log 2a: Already connected
       setIsModalOpen(true);
       return;
     }
 
+    console.log("Checking for window.ethereum..."); // Log 2b: Checking for provider
     if (window.ethereum) {
+      console.log("window.ethereum detected."); // Log 3: Provider detected
       try {
+        console.log("Requesting accounts via eth_requestAccounts..."); // Log 4: Requesting accounts
         const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+        console.log("Accounts received:", accounts); // Log 5: Accounts received
+
         if (accounts.length > 0) {
+          console.log("Setting wallet address:", accounts[0]); // Log 6: Setting address
           setWalletAddress(accounts[0]);
           setIsWalletDisconnected(false);
           localStorage.removeItem('walletDisconnected');
           await fetchBalance(accounts[0]);
           toast.success("Wallet connected successfully!");
+        } else {
+           console.log("No accounts returned from request."); // Log 7: No accounts
+           toast.warn("No accounts found. Please ensure your wallet is unlocked and accessible.");
         }
       } catch (error) {
-        console.error("Error connecting wallet:", error);
-        toast.error("Failed to connect wallet. Please try again.");
+        console.error("Error connecting wallet:", error); // Log 8: Error caught
+        toast.error(`Failed to connect wallet: ${error.message || 'Unknown error'}`);
       }
     } else {
+      console.log("window.ethereum not detected."); // Log 9: Provider not detected
       toast.error("No Ethereum wallet detected. Please install MetaMask.");
     }
   };
@@ -280,7 +293,7 @@ export default function HomePage() {
       />
       
       {/* Toast container for notifications */}
-      <ToastContainer position="top-center" autoClose={3000} />
+      {/* <ToastContainer position="top-center" autoClose={3000} /> */}
     </div>
   );
 }

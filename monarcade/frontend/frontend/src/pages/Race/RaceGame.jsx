@@ -602,7 +602,9 @@ export default function RaceGame() {
             console.log("RaceGame: Current player index:", index);
 
             playerCarsRef.current = players.map((player, idx) => ({
-                id: player.address,
+                id: player.peerID || player.address,
+                address: player.address,
+                peerID: player.peerID,
                 x: 0, y: 0, speed: 0, rotation: 0, lap: 0,
                 color: player.color,
                 name: player.address === walletAddress ? 'YOU' : `P${idx + 1}`,
@@ -648,10 +650,13 @@ export default function RaceGame() {
 
         console.log("Positioning cars at start line...");
         const trackCenterRadius = (trackData.innerRadius + trackData.outerRadius) / 2;
+        const startAngle = -Math.PI / 2; // 12 o'clock
+        const angleSpread = Math.PI / 12;
         cars.forEach((car) => {
-            car.x = trackData.center.x;
-            car.y = trackData.center.y - trackCenterRadius;
-            car.rotation = 0;
+            const angle = startAngle + (idx - (cars.length - 1) / 2) * angleSpread / cars.length;
+            car.x = trackData.center.x + Math.cos(angle) * trackCenterRadius;
+            car.y = trackData.center.y + Math.sin(angle) * trackCenterRadius;
+            car.rotation = (angle + Math.PI / 2) * 180 / Math.PI; // Point tangent to circle
             car.speed = 0;
             car.lap = 0;
             car.justCompletedLap = false;
@@ -662,11 +667,12 @@ export default function RaceGame() {
         setCarsReadyToRender(true);
 
         setPlayerPositionsUI(cars.map(car => ({
-             name: car.id,
+             id: car.id,
+             name: car.name,
              color: car.color,
              lap: car.lap,
              progress: 0,
-             isCurrentPlayer: car.id === walletAddress
+             isCurrentPlayer: car.address === walletAddress
         })));
 
         if (!gameEngineRef.current) {
@@ -777,7 +783,7 @@ export default function RaceGame() {
                      // Log angles in degrees for easier reading
                      const prevAngleDeg = (prevAngle * 180 / Math.PI).toFixed(1);
                      const currentAngleDeg = (currentAngle * 180 / Math.PI).toFixed(1);
-                     console.log(`LapCheck[${car.id.substring(0,6)}]: Lap=${car.lap}, JustCompleted=${car.justCompletedLap}, Speed=${car.speed.toFixed(1)}, Pos=(${prevX.toFixed(0)},${prevY.toFixed(0)})->(${car.x.toFixed(0)},${car.y.toFixed(0)}), Angles=(${prevAngleDeg} -> ${currentAngleDeg}), Crossed=${crossedFinishLine}`);
+                    //  console.log(`LapCheck[${car.id.substring(0,6)}]: Lap=${car.lap}, JustCompleted=${car.justCompletedLap}, Speed=${car.speed.toFixed(1)}, Pos=(${prevX.toFixed(0)},${prevY.toFixed(0)})->(${car.x.toFixed(0)},${car.y.toFixed(0)}), Angles=(${prevAngleDeg} -> ${currentAngleDeg}), Crossed=${crossedFinishLine}`);
                 }
 
                 if (crossedFinishLine && !car.justCompletedLap && car.speed > 0.1) {
@@ -792,7 +798,7 @@ export default function RaceGame() {
 
                     if (!gameEnded && car.lap >= totalLaps) {
                         console.log(`%cGame end condition met for ${car.id}`, 'color: red; font-weight: bold;');
-                        endGame(car.id);
+                        endGame(car.address);
                     }
                 }
 
@@ -816,9 +822,11 @@ export default function RaceGame() {
                     if (progressAngle < 0) progressAngle += 2 * Math.PI;
                     const progressFraction = (2 * Math.PI - progressAngle) / (2 * Math.PI);
                     return {
-                        name: car.id, color: car.color, lap: car.lap,
+                        id: car.id, // Use consistent ID
+                        name: car.name, // Use generated name
+                        color: car.color, lap: car.lap,
                         progress: car.lap + progressFraction,
-                        isCurrentPlayer: car.id === walletAddress
+                        isCurrentPlayer: car.address === walletAddress
                     };
                 });
                 updatedPositions.sort((a, b) => b.progress - a.progress);
@@ -853,12 +861,8 @@ export default function RaceGame() {
 
     // ... (Engine Start/Stop, useEffect cleanup, Event Handlers) ...
      // --- Engine Start/Stop ---
-    const startGameEngine = useCallback(() => {
-        if (gameEngineRef.current || !trackDataRef.current) {
-             if(gameEngineRef.current) console.warn("startGameEngine called but engine already running.");
-             if(!trackDataRef.current) console.warn("startGameEngine called but track data not ready.");
-             return;
-        }
+     const startGameEngine = useCallback(() => {
+        if (gameEngineRef.current || !trackDataRef.current) return;
         console.log("%cRaceGame: Starting Engine...", "color: green; font-weight: bold;");
         lastFrameTimeRef.current = performance.now();
         loopCounter.current = 0;
@@ -908,7 +912,8 @@ export default function RaceGame() {
             {/* Car Layer */}
             {carsReadyToRender && carPositions.map((car) => (
                 <Car
-                    key={car.id} x={car.x} y={car.y}
+                    key={car.id} 
+                    x={car.x} y={car.y}
                     rotation={car.rotation} color={car.color}
                     isCurrentPlayer={car.isCurrentPlayer} playerName={car.name}
                 />
@@ -919,15 +924,16 @@ export default function RaceGame() {
                 <GameControls
                     currentLap={currentLap} // Reads from context
                     totalLaps={totalLaps}
-                    playerPositions={playerPositionsUI}
+                    playerPositions={playerPositionsUI} // Use UI sorted state
+                    // Find current player index in the UI-specific array for highlighting
                     currentPlayerIndex={playerPositionsUI.findIndex(p => p.isCurrentPlayer)}
                     gameEnded={gameEnded}
-                    winner={winner ? {
-                        name: winner,
+                    winner={winner ? { // Format winner data for UI using address
+                        name: players.find(p => p.address === winner)?.name || winner.slice(0,6), // Use name from context players
                         color: players.find(p => p.address === winner)?.color || '#ffffff',
                         isCurrentPlayer: winner === walletAddress
                     } : null}
-                    onReturnToLobby={handleReturnToLobby}
+                    onReturnToLobby={handleReturnToLobby} // Use updated handler
                 />
             )}
 
