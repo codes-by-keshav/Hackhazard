@@ -2,61 +2,83 @@ import { useState, useEffect } from 'react'; // Added useEffect
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useRaceContext } from '../../context/RaceContext';
-import { ToastContainer, toast } from 'react-toastify';
+import {  toast } from 'react-toastify';
 
 export default function RoomLobby() {
-    const { walletAddress, createRoom, joinRoom, isProcessing, disconnectPeer, roomCode } = useRaceContext(); // Add disconnectPeer, roomCode
+    const navigate = useNavigate();
+    // const location = useLocation(); // Get current location
+    const { walletAddress, roomCode, createRoom, joinRoom, disconnectPeer } = useRaceContext();
+    
+    const [isProcessing, setIsProcessing] = useState(false);
     const [joinCode, setJoinCode] = useState('');
     const [error, setError] = useState('');
-    const navigate = useNavigate();
 
-    // Ensure P2P is disconnected when landing on this page if coming from a room
-    useEffect(() => {
-        // If the context still has a roomCode when mounting the lobby,
-        // it means we likely came back from a game room without proper cleanup
-        // or via browser back button. Call disconnectPeer to reset the P2P state.
-        // The disconnectPeer function in the context handles checking if peerRef exists.
-        // NOTE: This check should only happen ONCE on initial mount.
-        const initialRoomCode = roomCode; // Capture roomCode on mount
-        if (initialRoomCode) {
-            console.log("RoomLobby mounted with existing roomCode in context, calling disconnectPeer.");
-            disconnectPeer();
-        }
-    // Run ONLY when component mounts or if disconnectPeer function reference changes (unlikely)
-    }, [disconnectPeer]);
 
-    const handleCreateRoom = () => {
+    // Change your handleCreateRoom function to be async and await the Promise
+    const handleCreateRoom = async () => {
         if (!walletAddress) {
-            toast.error("Please connect your wallet on the homepage first.");
+            toast.error("Please connect wallet first");
             return;
         }
-        if (isProcessing) return;
-
-        const newRoomCode = createRoom(); // Context now handles P2P setup
-        if (newRoomCode) {
-            navigate(`/race/room/${newRoomCode}`);
-        } else {
-            // Handle potential error from createRoom (e.g., P2P already active)
-            console.error("Failed to create room (check context logs).");
+        
+        if (isProcessing) {
+            return;
+        }
+        
+        try {
+            setIsProcessing(true);
+            console.log("Starting room creation process...");
+            
+            const newRoomCode = await createRoom();
+            console.log("Room creation completed, code:", newRoomCode);
+            
+            if (newRoomCode) {
+                console.log(`Navigating to room ${newRoomCode}`);
+                navigate(`/race/room/${newRoomCode}`);
+            } else {
+                toast.error("Failed to create room");
+            }
+        } catch (error) {
+            console.error("Error creating room:", error);
+            toast.error("Failed to create room");
+        } finally {
+            setIsProcessing(false);
         }
     };
 
-    const handleJoinRoom = () => {
+    const handleJoinRoom = async () => {
         if (!walletAddress) {
             toast.error("Please connect your wallet on the homepage first.");
             return;
         }
-        if (isProcessing) return;
-
+        
+        if (isProcessing) {
+            return;
+        }
+        
         if (joinCode.length !== 6 || !/^\d{6}$/.test(joinCode)) {
             setError('Room code must be 6 digits');
             return;
         }
-
-        joinRoom(joinCode); // Context handles P2P connection attempt
-        // Navigation should ideally happen *after* successful P2P connection confirmation,
-        // but for simplicity, navigate optimistically. Context/GameRoom handles redirects if connection fails.
-        navigate(`/race/room/${joinCode}`);
+        
+        try {
+            setIsProcessing(true);
+            
+            // Wait for join operation to complete
+            const success = await joinRoom(joinCode);
+            
+            if (success) {
+                navigate(`/race/room/${joinCode}`);
+            } else {
+                // Error message already shown by joinRoom function
+                setError('Failed to join room');
+            }
+        } catch (error) {
+            console.error("Error joining room:", error);
+            toast.error("Failed to join room");
+        } finally {
+            setIsProcessing(false);
+        }
     };
 
     return (
@@ -138,7 +160,7 @@ export default function RoomLobby() {
                 </motion.div>
             </div>
             {/* Ensure ToastContainer is rendered */}
-            <ToastContainer position="bottom-right" autoClose={5000} />
+            {/* <ToastContainer position="bottom-right" autoClose={5000} /> */}
         </div>
     );
 }

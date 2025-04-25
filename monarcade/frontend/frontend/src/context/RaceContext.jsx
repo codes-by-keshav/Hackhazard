@@ -1,7 +1,10 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { ethers } from 'ethers';
-import Peer from 'peerjs';
 import { toast } from 'react-toastify';
+import {
+    createGameRoom, joinGameRoom, updatePlayerData, updateGameData,
+    subscribeToRoom, leaveGameRoom, setupDisconnect, checkRoomExists
+} from '../services/firebase';
 
 // --- Helper Functions (Outside Component) ---
 const generateGameId = (roomCode) => {
@@ -9,11 +12,6 @@ const generateGameId = (roomCode) => {
     const data = `${roomCode}-${Date.now()}-${salt}`;
     // Use ethers v6 or v5 id function
     return typeof ethers.id === 'function' ? ethers.id(data) : ethers.utils.id(data);
-};
-
-const sanitizeForPeerId = (address) => {
-    // PeerJS IDs can only contain alphanumeric characters, underscores, and hyphens.
-    return address.replace(/[^a-zA-Z0-9_-]/g, '');
 };
 
 const getRandomNeonColor = () => {
@@ -58,10 +56,11 @@ export const RaceProvider = ({ children }) => {
     const [signer, setSigner] = useState(null);
     const [contract, setContract] = useState(null);
     const [roomCode, setRoomCode] = useState('');
-    const [players, setPlayers] = useState([]); // { address, peerId, ready, color, isBot, hasStakedLocally, signature }
+    const [players, setPlayers] = useState([]); // { address, ready, color, isBot, hasStakedLocally, signature }
     const [isHost, setIsHost] = useState(false);
     const [stakeAmount, setStakeAmount] = useState('0');
     const [isReady, setIsReady] = useState(false);
+    const [hasStakedLocally, setHasStakedLocally] = useState(false); // <-- Add this line
     const [gameId, setGameId] = useState(null);
     const [gameContractTimestamp, setGameContractTimestamp] = useState(null);
     const [onChainGameStatus, setOnChainGameStatus] = useState(0); // 0: NonExistent, 1: Created, 2: InProgress, 3: Completed
@@ -71,32 +70,23 @@ export const RaceProvider = ({ children }) => {
     const [currentLap, setCurrentLap] = useState(0);
     const [totalLaps] = useState(3);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [connectionState, setConnectionState] = useState('disconnected');
+    const [isConnecting, setIsConnecting] = useState(false);
 
     // --- Refs ---
-    const peerRef = useRef(null);
-    const hostConnectionRef = useRef(null);
-    const clientConnectionsRef = useRef({});
-    const localPeerIdRef = useRef(null);
+    const roomSubscriptionRef = useRef(null);
+    const previousPlayerCountRef = useRef(0); // Ref to store previous player count
+
+
 
     // --- Refs for Functions (to break dependency cycle) ---
     const checkAllPlayersStakedRef = useRef(null);
     const callStakeRef = useRef(null);
     const checkAndSubmitResultRef = useRef(null);
     const resetGameLocallyRef = useRef(null);
-    const broadcastToClientsRef = useRef(null);
-    const disconnectPeerRef = useRef(null);
-    const handleP2PMessageRef = useRef(null);
-    const setupConnectionListenersRef = useRef(null);
+    const disconnectRoomRef = useRef(null);
 
-    let connectionTimeout = setTimeout(() => {
-        if (hostConnectionRef.current && !hostConnectionRef.current.open) {
-          console.error("Connection to host timed out after 10 seconds");
-          toast.error("Connection to host timed out. Please try again.");
-          disconnectPeerRef.current?.();
-        }
-      }, 10000);
-
-    // --- Callbacks Definition Order ---
+    // --- Callbacks Definition ---
 
     // 1. Core Utilities & State Resets
     const resetGameLocally = useCallback((newGameId) => {
@@ -116,25 +106,62 @@ export const RaceProvider = ({ children }) => {
         setGameId(newGameId); // Set the new game ID
         setGameContractTimestamp(null);
         setIsProcessing(false);
-        // Note: stakeAmount might persist or be reset based on desired UX
-    }, []); // No external dependencies needed for local reset logic itself
+    }, []);
     useEffect(() => { resetGameLocallyRef.current = resetGameLocally; }, [resetGameLocally]);
 
-    // 2. P2P Cleanup
-    const disconnectPeer = useCallback(() => {
-        console.log("Attempting to disconnect PeerJS...");
-        if (peerRef.current) {
-            console.log("Destroying existing PeerJS instance:", peerRef.current.id);
-            peerRef.current.destroy();
-            peerRef.current = null;
-        } else {
-            console.log("No active PeerJS instance to destroy.");
-        }
-        hostConnectionRef.current = null;
-        clientConnectionsRef.current = {};
-        localPeerIdRef.current = null;
+    const handleRoomUpdate = useCallback((roomData) => {
+        console.log(`%c RaceContext: handleRoomUpdate MINIMAL START - Raw Data:`, 'color: red; font-weight: bold;', roomData);
 
-        // Reset relevant state
+        if (!roomData || !roomData.players) {
+            console.warn("RaceContext MINIMAL: No room data or no players node. Setting players to [].");
+            setPlayers([]);
+            console.log(`%c RaceContext MINIMAL: setPlayers([]) call completed.`, 'color: red;');
+        } else {
+            const playersArray = Object.entries(roomData.players).map(([addr, data]) => ({
+                address: addr,
+                ...data
+            }));
+            console.log(`%c RaceContext MINIMAL: Calling setPlayers with:`, 'color: red; font-weight: bold;', playersArray);
+            setPlayers(playersArray); // ONLY set players
+            console.log(`%c RaceContext MINIMAL: setPlayers call completed.`, 'color: red;');
+        }
+        console.log(`%c RaceContext: handleRoomUpdate MINIMAL END`, 'color: red; font-weight: bold;');
+
+    // Minimal dependencies for this test: only setPlayers
+    }, [setPlayers]); // Temporarily reduce dependencies drastically for testing
+
+    // IMPORTANT: Remember to restore the original handleRoomUpdate and its dependencies after this test!
+
+    // 2. Room Disconnection & Cleanup
+    // 2. Room Disconnection & Cleanup
+    const disconnectRoom = useCallback(async () => {
+        console.log("Disconnecting from room...");
+        const currentRoomCode = roomCodeRef.current; // Use a ref to get current room code reliably
+        const currentWalletAddress = walletAddressRef.current; // Use a ref
+
+        // Unsubscribe FIRST
+        if (roomSubscriptionRef.current) {
+            console.log("Unsubscribing Firebase listener.");
+            roomSubscriptionRef.current(); // Call the unsubscribe function
+            roomSubscriptionRef.current = null;
+        } else {
+             console.log("No active Firebase subscription to unsubscribe.");
+        }
+
+        // If in a room, remove player from Firebase
+        if (currentRoomCode && currentWalletAddress) {
+            try {
+                console.log(`Leaving Firebase room ${currentRoomCode} for ${currentWalletAddress}`);
+                await leaveGameRoom(currentRoomCode, currentWalletAddress);
+            } catch (err) {
+                console.error("Error leaving room:", err);
+            }
+        } else {
+             console.log("Not in a room or no wallet address, skipping Firebase leave.");
+        }
+
+        // Reset state
+        console.log("Resetting local state after disconnect.");
         setPlayers([]);
         setRoomCode('');
         setIsHost(false);
@@ -143,12 +170,40 @@ export const RaceProvider = ({ children }) => {
         setGameEnded(false);
         setWinner(null);
         setIsReady(false);
+        setHasStakedLocally(false); // Reset local stake status
         setOnChainGameStatus(0);
         setGameContractTimestamp(null);
         setIsProcessing(false);
-        console.log("PeerJS disconnected and relevant context state reset.");
-    }, []); // No dependencies
-    useEffect(() => { disconnectPeerRef.current = disconnectPeer; }, [disconnectPeer]);
+        setConnectionState('disconnected');
+
+        console.log("Room disconnected and state reset complete.");
+        return true;
+    // Use refs for values needed only during disconnect to avoid extra dependencies
+    }, [/* Keep dependencies minimal, rely on refs for disconnect values */]);
+    // Use refs to store values needed only for cleanup, avoiding dependency loops
+    const roomCodeRef = useRef(roomCode);
+    const walletAddressRef = useRef(walletAddress);
+    useEffect(() => { roomCodeRef.current = roomCode; }, [roomCode]);
+    useEffect(() => { walletAddressRef.current = walletAddress; }, [walletAddress]);
+    useEffect(() => { disconnectRoomRef.current = disconnectRoom; }, [disconnectRoom]);
+
+    const disconnectWallet = useCallback(async () => {
+        console.log("Disconnecting wallet...");
+        // Disconnect from the room first if connected
+        await disconnectRoomRef.current?.();
+
+        // Reset wallet-related state
+        setWalletAddress('');
+        setBalance('0');
+        setSigner(null);
+        setContract(null);
+
+        // Optionally clear provider state if needed (e.g., disconnect from MetaMask)
+        // This depends on how you want to handle full wallet disconnection vs. just clearing app state
+        // For now, just clearing app state and marking as disconnected locally
+        localStorage.setItem('walletDisconnected', 'true'); // Mark as manually disconnected
+        toast.info("Wallet disconnected.");
+    }, []);
 
     // 3. Wallet & Contract Initialization
     const fetchBalance = useCallback(async (address, provider) => {
@@ -179,7 +234,7 @@ export const RaceProvider = ({ children }) => {
             setContract(null);
             toast.error("Failed to initialize game contract.");
         }
-    }, []); // Dependencies: CONTRACT_ADDRESS, CONTRACT_ABI (constants)
+    }, []);
 
     const connectWallet = useCallback(async () => {
         console.log("Attempting to connect wallet...");
@@ -200,7 +255,7 @@ export const RaceProvider = ({ children }) => {
                 setWalletAddress(currentAddress);
                 setSigner(currentSigner);
                 await fetchBalance(currentAddress, provider);
-                initializeContract(currentSigner); // Initialize contract after getting signer
+                initializeContract(currentSigner);
 
                 localStorage.removeItem('walletDisconnected');
                 toast.success("Wallet connected!");
@@ -211,36 +266,14 @@ export const RaceProvider = ({ children }) => {
         } catch (error) {
             console.error("Error connecting wallet:", error);
             toast.error(`Wallet connection failed: ${error.message || 'Unknown error'}`);
-            // Reset state if connection fails
             setWalletAddress('');
             setSigner(null);
             setContract(null);
             setBalance('0');
         }
-    }, [fetchBalance, initializeContract]); // Dependencies
+    }, [fetchBalance, initializeContract]);
 
-    // 4. P2P Communication Primitives
-    const sendToHost = useCallback((message) => {
-        if (hostConnectionRef.current && hostConnectionRef.current.open) {
-            console.log("Client: Sending message to host:", message);
-            hostConnectionRef.current.send(message);
-        } else {
-            console.warn("Client: Cannot send message, no open connection to host.");
-        }
-    }, []); // Depends only on ref
-
-    const broadcastToClients = useCallback((message, excludePeerId = null) => {
-        if (!isHost) return;
-        console.log("Host: Broadcasting message:", message, "Excluding:", excludePeerId);
-        Object.entries(clientConnectionsRef.current).forEach(([peerId, conn]) => {
-            if (peerId !== excludePeerId && conn && conn.open) {
-                conn.send(message);
-            }
-        });
-    }, [isHost]); // Depends only on ref and isHost state
-    useEffect(() => { broadcastToClientsRef.current = broadcastToClients; }, [broadcastToClients]);
-
-    // 5. Contract Interaction Callbacks
+    // 4. Contract Interaction Callbacks
     const checkAndSubmitResult = useCallback(async () => {
         const winnerPlayer = players.find(p => p.address === winner);
         if (!winnerPlayer || walletAddress !== winner || !contract || isProcessing || onChainGameStatus !== 2) {
@@ -249,7 +282,7 @@ export const RaceProvider = ({ children }) => {
         }
 
         const nonWinners = players.filter(p => p.address !== winner && !p.isBot);
-        const collectedSignatures = nonWinners.map(p => p.signature).filter(Boolean); // Filter out null/undefined
+        const collectedSignatures = nonWinners.map(p => p.signature).filter(Boolean);
 
         console.log(`Checking signatures: Got ${collectedSignatures.length}/${nonWinners.length}`);
 
@@ -265,37 +298,32 @@ export const RaceProvider = ({ children }) => {
                 setOnChainGameStatus(3); // Mark as Completed
                 toast.success("Result submitted successfully! Winnings distributed.");
                 console.log("Result submitted to contract. Tx:", tx.hash);
-                if (signer) await fetchBalance(walletAddress, signer.provider); // Update winner's balance
+                if (signer) await fetchBalance(walletAddress, signer.provider);
             } catch (error) {
                 console.error("Error submitting result:", error);
                 toast.error(`Result submission failed: ${error.reason || error.message || 'Unknown contract error'}`);
-                // Should we reset status or allow retry? Depends on contract logic.
             } finally {
                 setIsProcessing(false);
             }
         } else if (nonWinners.length === 0) {
-             // Only one player (or only bots + winner), submit without signatures?
-             // Contract needs to handle this case (e.g., if signatures array is empty)
-             console.log("No non-bot opponents, submitting result without signatures...");
-             setIsProcessing(true);
-             try {
-                 const tx = await contract.submitResult(gameId, winner, []); // Submit empty array
-                 await tx.wait();
-                 setOnChainGameStatus(3);
-                 toast.success("Result submitted successfully! Winnings distributed.");
-                 if (signer) await fetchBalance(walletAddress, signer.provider);
-             } catch (error) {
-                 console.error("Error submitting result (no opponents):", error);
-                 toast.error(`Result submission failed: ${error.reason || error.message || 'Unknown contract error'}`);
-             } finally {
-                 setIsProcessing(false);
-             }
+            console.log("No non-bot opponents, submitting result without signatures...");
+            setIsProcessing(true);
+            try {
+                const tx = await contract.submitResult(gameId, winner, []);
+                await tx.wait();
+                setOnChainGameStatus(3);
+                toast.success("Result submitted successfully! Winnings distributed.");
+                if (signer) await fetchBalance(walletAddress, signer.provider);
+            } catch (error) {
+                console.error("Error submitting result (no opponents):", error);
+                toast.error(`Result submission failed: ${error.reason || error.message || 'Unknown contract error'}`);
+            } finally {
+                setIsProcessing(false);
+            }
         } else {
             console.log(`Waiting for more signatures... Got ${collectedSignatures.length}/${nonWinners.length}`);
-            // Optionally show a toast or status update
-            // toast.info(`Waiting for signatures... ${collectedSignatures.length}/${nonWinners.length}`);
         }
-    }, [contract, gameId, winner, players, isProcessing, onChainGameStatus, walletAddress, signer, fetchBalance, setOnChainGameStatus, setIsProcessing]);
+    }, [contract, gameId, winner, players, isProcessing, onChainGameStatus, walletAddress, signer, fetchBalance]);
     useEffect(() => { checkAndSubmitResultRef.current = checkAndSubmitResult; }, [checkAndSubmitResult]);
 
     const checkAllPlayersStaked = useCallback(async () => {
@@ -317,23 +345,34 @@ export const RaceProvider = ({ children }) => {
             if (status === 2) { // GameStatus.InProgress
                 console.log("Contract confirms: All players staked! Starting race...");
                 toast.success("All players ready! Starting race...");
-                broadcastToClientsRef.current?.({ type: 'StartRace' }); // Use ref
-                setGameStarted(true); // Start game locally for host too
+
+                // Update Firebase with game started state
+                if (roomCode) {
+                    updateGameData(roomCode, { gameStarted: true }).catch(err => {
+                        console.error("Error updating game start state:", err);
+                    });
+                }
+
+                setGameStarted(true);
             } else {
                 console.log("Contract status still 'Created'. Waiting for contract state update or more stakes.");
-                // Maybe some players haven't staked on chain yet, or event propagation delay
             }
         } catch (error) {
             console.error("Error checking game status:", error);
             toast.error("Failed to check game status on contract.");
         }
-    }, [contract, isHost, gameId, onChainGameStatus, players, setOnChainGameStatus, setGameStarted]); // Removed broadcastToClients from deps
+    }, [contract, isHost, gameId, onChainGameStatus, players, roomCode]);
     useEffect(() => { checkAllPlayersStakedRef.current = checkAllPlayersStaked; }, [checkAllPlayersStaked]);
 
     const callStake = useCallback(async () => {
-        const localPlayer = players.find(p => p.peerId === localPeerIdRef.current);
-        if (!contract || isProcessing || onChainGameStatus !== 1 || !localPlayer || localPlayer.hasStakedLocally) {
-            console.log("Conditions not met for staking:", { contractExists: !!contract, isProcessing, onChainGameStatus, localPlayerExists: !!localPlayer, hasStaked: localPlayer?.hasStakedLocally });
+        if (!contract || isProcessing || onChainGameStatus !== 1 || walletAddress === '' || players.find(p => p.address === walletAddress)?.hasStakedLocally) {
+            console.log("Conditions not met for staking:", {
+                contractExists: !!contract,
+                isProcessing,
+                onChainGameStatus,
+                walletAddressValid: walletAddress !== '',
+                hasStaked: players.find(p => p.address === walletAddress)?.hasStakedLocally
+            });
             return;
         }
 
@@ -360,49 +399,50 @@ export const RaceProvider = ({ children }) => {
             const tx = await contract.stake(gameId, { value: stakeAmountWei });
             await tx.wait();
 
-            // Update local state first for responsiveness
-            setPlayers(prev => prev.map(p => p.peerId === localPeerIdRef.current ? { ...p, hasStakedLocally: true } : p));
+            // Update Firebase that player has staked
+            if (roomCode) {
+                await updatePlayerData(roomCode, walletAddress, { hasStakedLocally: true });
+            }
+
             toast.success("Successfully staked!");
             console.log("Stake successful for", walletAddress);
 
-            // Inform others via P2P
             if (isHost) {
-                broadcastToClientsRef.current?.({ type: 'StakeConfirmed', payload: { peerId: localPeerIdRef.current, address: walletAddress } }); // Use ref
-                checkAllPlayersStakedRef.current?.(); // Use ref
-            } else {
-                sendToHost({ type: 'ClientStakeConfirmed', payload: { address: walletAddress } });
+                checkAllPlayersStakedRef.current?.();
             }
 
         } catch (error) {
             console.error("Error staking:", error);
             toast.error(`Staking failed: ${error.reason || error.message || 'Unknown contract error'}`);
+
             // Revert ready state if stake failed
             setIsReady(false);
-            setPlayers(prev => prev.map(p => p.peerId === localPeerIdRef.current ? { ...p, ready: false, hasStakedLocally: false } : p));
-            if (isHost) {
-                 broadcastToClientsRef.current?.({ type: 'PlayerUpdate', payload: { peerId: localPeerIdRef.current, data: { ready: false } } }); // Use ref
-            } else {
-                 sendToHost({ type: 'ClientUpdate', payload: { data: { ready: false } } });
+
+            // Update Firebase with ready false
+            if (roomCode) {
+                updatePlayerData(roomCode, walletAddress, { ready: false }).catch(err => {
+                    console.error("Error updating ready state:", err);
+                });
             }
         } finally {
             setIsProcessing(false);
         }
-    }, [contract, gameId, stakeAmount, isProcessing, onChainGameStatus, walletAddress, players, isHost, sendToHost, setPlayers, setIsProcessing, setIsReady]); // Removed broadcastToClients, checkAllPlayersStaked from deps
+    }, [contract, gameId, stakeAmount, isProcessing, onChainGameStatus, walletAddress, players, isHost, roomCode]);
     useEffect(() => { callStakeRef.current = callStake; }, [callStake]);
 
     const callCreateGame = useCallback(async () => {
         if (!isHost || !contract || isProcessing || onChainGameStatus !== 0) {
-             console.log("Conditions not met for creating game:", { isHost, contractExists: !!contract, isProcessing, onChainGameStatus });
-             return;
+            console.log("Conditions not met for creating game:", { isHost, contractExists: !!contract, isProcessing, onChainGameStatus });
+            return;
         }
-        const playerAddresses = players.filter(p => !p.isBot).map(p => p.address); // Only real players for contract
+        const playerAddresses = players.filter(p => !p.isBot).map(p => p.address);
         if (playerAddresses.length < MIN_PLAYERS) {
             toast.error(`Need at least ${MIN_PLAYERS} real players to create game on chain.`);
             return;
         }
         if (playerAddresses.length > MAX_PLAYERS) {
-             toast.error(`Cannot exceed ${MAX_PLAYERS} real players.`);
-             return;
+            toast.error(`Cannot exceed ${MAX_PLAYERS} real players.`);
+            return;
         }
 
         let stakeAmountWei;
@@ -427,617 +467,348 @@ export const RaceProvider = ({ children }) => {
             const tx = await contract.createGame(gameId, playerAddresses, stakeAmountWei);
             const receipt = await tx.wait();
 
-            // Fetch creation timestamp from contract state (more reliable than event sometimes)
+            // Fetch creation timestamp from contract state
             const gameData = await contract.games(gameId);
-            // Ensure gameData.createdAt is treated as BigInt if using ethers v6
             const creationTimestamp = typeof gameData.createdAt === 'bigint' ? Number(gameData.createdAt) : gameData.createdAt.toNumber();
+
+            // Update Firebase game state
+            if (roomCode) {
+                await updateGameData(roomCode, {
+                    onChainGameStatus: 1,
+                    gameContractTimestamp: creationTimestamp
+                });
+            }
+
             setGameContractTimestamp(creationTimestamp);
-            setOnChainGameStatus(1); // Mark as Created
+            setOnChainGameStatus(1);
 
             console.log("Game created on chain. Tx:", receipt.transactionHash, "Timestamp:", creationTimestamp);
             toast.success("Game created on blockchain!");
 
-            // Inform clients via P2P
-            broadcastToClientsRef.current?.({ type: 'GameCreatedOnChain', payload: { gameId, timestamp: creationTimestamp } }); // Use ref
-
             // If host was already 'Ready', proceed to stake
             if (isReady) {
-                await callStakeRef.current?.(); // Use ref
+                await callStakeRef.current?.();
             }
 
         } catch (error) {
             console.error("Error creating game on contract:", error);
             toast.error(`Failed to create game: ${error.reason || error.message || 'Unknown contract error'}`);
-            setOnChainGameStatus(0); // Revert status if creation failed
+            setOnChainGameStatus(0);
         } finally {
             setIsProcessing(false);
         }
-    }, [contract, isHost, players, stakeAmount, gameId, isProcessing, onChainGameStatus, isReady, setGameContractTimestamp, setOnChainGameStatus, setIsProcessing]); // Removed broadcastToClients, callStake from deps
-    // No need for callCreateGame ref unless it's called from handleP2PMessage
+    }, [contract, isHost, players, stakeAmount, gameId, isProcessing, onChainGameStatus, isReady, roomCode]);
 
-    // 6. P2P Core Logic (handleP2PMessage now uses refs for problematic functions)
-    const handleP2PMessage = useCallback((message, senderPeerId) => {
-        try{
-            console.log(`Handling P2P Message from ${senderPeerId}:`, message);
-            switch (message.type) {
-                // --- Client receiving messages from Host ---
-                case 'RoomState':
-                    if (!isHost) {
-                        console.log("Client: Received initial room state from host.");
-                        setPlayers(message.payload.players);
-                        setGameId(message.payload.gameId); // Sync gameId
-                        setStakeAmount(message.payload.stakeAmount); // Sync stake amount
-                        setOnChainGameStatus(message.payload.onChainGameStatus); // Sync contract status
-                        setGameContractTimestamp(message.payload.gameContractTimestamp); // Sync timestamp
-                    }
-                    break;
-                case 'PlayerJoined':
-                    if (message.payload.peerId !== localPeerIdRef.current) { // Don't add self again
-                        console.log("PlayerJoined message received for:", message.payload.address);
-                        setPlayers(prev => {
-                            // Avoid duplicates if state update is slightly delayed
-                            if (prev.some(p => p.peerId === message.payload.peerId)) {
-                                return prev;
-                            }
-                            return [...prev, message.payload];
-                        });
-                    }
-                    break;
-                case 'PlayerLeft':
-                    console.log("Player left:", message.payload.address);
-                    setPlayers(prev => prev.filter(p => p.peerId !== message.payload.peerId));
-                    if (message.payload.peerId === roomCode && !isHost) { // Host's peerId is the roomCode
-                        toast.error("Host disconnected! Leaving room.");
-                        disconnectPeerRef.current?.(); // Use ref
-                    }
-                    break;
-                case 'PlayerUpdate':
-                    console.log("Player updated:", message.payload.peerId, message.payload.data);
-                    setPlayers(prev => prev.map(p =>
-                        p.peerId === message.payload.peerId ? { ...p, ...message.payload.data } : p
-                    ));
-                    if (message.payload.peerId === localPeerIdRef.current && message.payload.data.ready !== undefined) {
-                        setIsReady(message.payload.data.ready);
-                    }
-                    break;
-                case 'GameCreatedOnChain':
-                    if (!isHost) {
-                        console.log("Client: Received GameCreatedOnChain from host.");
-                        setGameId(message.payload.gameId);
-                        setGameContractTimestamp(message.payload.timestamp);
-                        setOnChainGameStatus(1); // Status becomes 'Created'
-                        toast.info("Game created on blockchain. Ready to stake!");
-                        if (isReady) {
-                            callStakeRef.current?.(); // Use ref
-                        }
-                    }
-                    break;
-                case 'StakeConfirmed':
-                    console.log("Stake confirmed for:", message.payload.address);
-                    setPlayers(prev => prev.map(p =>
-                        p.peerId === message.payload.peerId ? { ...p, hasStakedLocally: true } : p
-                    ));
-                    if (isHost) {
-                        checkAllPlayersStakedRef.current?.(); // Use ref
-                    }
-                    break;
-                case 'StartRace':
-                    console.log("Received StartRace signal.");
-                    setGameStarted(true);
-                    setOnChainGameStatus(2); // Status becomes 'InProgress'
-                    break;
-                case 'ResultSignature':
-                    if (walletAddress === winner) { // Only the winner processes signatures
-                        console.log("Winner: Received signature from", message.payload.peerId);
-                        setPlayers(prev => prev.map(p =>
-                            p.peerId === message.payload.peerId ? { ...p, signature: message.payload.signature } : p
-                        ));
-                        checkAndSubmitResultRef.current?.(); // Use ref
-                    }
-                    break;
-                case 'GameReset':
-                    if (!isHost) {
-                        console.log("Client: Received GameReset signal.");
-                        resetGameLocallyRef.current?.(message.payload.newGameId); // Use ref
-                        toast.info("Host started a new round!");
-                    }
-                    break;
-
-                // --- Host receiving messages from Client ---
-                case 'RequestRoomState':
-                    if (isHost && clientConnectionsRef.current[senderPeerId]) {
-                        console.log("Host: Received RequestRoomState from", senderPeerId, "Payload:", message.payload);
-
-                        let updatedPlayers = [...players]; // Create a mutable copy
-                        const playerExists = players.some(p => p.peerId === senderPeerId);
-
-                        if (!playerExists && message.payload?.address) {
-                            const newPlayer = {
-                                address: message.payload.address,
-                                peerId: senderPeerId,
-                                ready: false,
-                                color: getRandomNeonColor(), // Host assigns color
-                                hasStakedLocally: false,
-                                signature: null,
-                                isBot: false
-                            };
-                            updatedPlayers.push(newPlayer);
-                            setPlayers(updatedPlayers); // Update host's state *before* sending
-
-                            // Broadcast PlayerJoined to OTHERS immediately after adding
-                            broadcastToClientsRef.current?.({ type: 'PlayerJoined', payload: newPlayer }, senderPeerId); // Use ref
-                            console.log("Host: Added new player to state and broadcasting PlayerJoined:", newPlayer);
-                        } else if (!playerExists) {
-                            console.warn("Host: Received RequestRoomState but missing player address in payload. Cannot add player.");
-                        }
-
-                        // Send the potentially updated state back to the requesting client
-                        const currentState = {
-                            players: updatedPlayers, // Send the updated list
-                            gameId: gameId,
-                            stakeAmount: stakeAmount,
-                            onChainGameStatus: onChainGameStatus,
-                            gameContractTimestamp: gameContractTimestamp
-                        };
-                        clientConnectionsRef.current[senderPeerId].send({ type: 'RoomState', payload: currentState });
-                        console.log("Host: Sent RoomState back to", senderPeerId);
-                    }
-                    break;
-                case 'ClientUpdate':
-                    if (isHost) {
-                        console.log("Host: Received ClientUpdate from", senderPeerId, message.payload.data);
-                        const updatedPlayer = players.find(p => p.peerId === senderPeerId);
-                        if (updatedPlayer) {
-                            const newPlayers = players.map(p => p.peerId === senderPeerId ? { ...p, ...message.payload.data } : p);
-                            setPlayers(newPlayers);
-                            broadcastToClientsRef.current?.({ type: 'PlayerUpdate', payload: { peerId: senderPeerId, data: message.payload.data } }, senderPeerId); // Use ref
-                        }
-                    }
-                    break;
-                case 'ClientStakeConfirmed':
-                    if (isHost) {
-                        console.log("Host: Received ClientStakeConfirmed from", senderPeerId);
-                        const updatedPlayer = players.find(p => p.peerId === senderPeerId);
-                        if (updatedPlayer) {
-                            const newPlayers = players.map(p => p.peerId === senderPeerId ? { ...p, hasStakedLocally: true } : p);
-                            setPlayers(newPlayers);
-                            broadcastToClientsRef.current?.({ type: 'StakeConfirmed', payload: { peerId: senderPeerId, address: updatedPlayer.address } }, senderPeerId); // Use ref
-                            checkAllPlayersStakedRef.current?.(); // Use ref
-                        }
-                    }
-                    break;
-                case 'ClientSignature':
-                    if (isHost) {
-                        console.log("Host: Received ClientSignature from", senderPeerId);
-                        const winnerPlayer = players.find(p => p.address === winner);
-                        if (winnerPlayer && winnerPlayer.peerId && clientConnectionsRef.current[winnerPlayer.peerId]) {
-                            console.log("Host: Forwarding signature to winner", winnerPlayer.address);
-                            clientConnectionsRef.current[winnerPlayer.peerId].send({
-                                type: 'ResultSignature',
-                                payload: { peerId: senderPeerId, signature: message.payload.signature }
-                            });
-                        } else if (walletAddress === winner) {
-                            console.log("Host (Winner): Processing signature from", senderPeerId);
-                            setPlayers(prev => prev.map(p =>
-                                p.peerId === senderPeerId ? { ...p, signature: message.payload.signature } : p
-                            ));
-                            checkAndSubmitResultRef.current?.(); // Use ref
-                        } else {
-                            console.warn("Host: Received signature but couldn't find winner's connection or host is not winner.");
-                        }
-                    }
-                    break;
-
-                default:
-                    console.warn("Unknown P2P message type:", message.type);
-            }
+    // 5. Room Management Functions
+    // Update createRoom to properly return the room code
+    const createRoom = useCallback(async () => {
+        if (!walletAddress) {
+            toast.error("Connect wallet first!");
+            return null;
         }
-        catch (error) {
-            console.error("Error handling P2P message:", error, "Message was:", message);
-            toast.error("Error processing P2P message");
-          }
-    }, [
-        // REMOVE the problematic functions from this dependency array
-        isHost, players, roomCode, gameId, stakeAmount, onChainGameStatus, gameContractTimestamp,
-        isReady, winner, walletAddress,
-        // Keep state setters and non-problematic functions/helpers
-        getRandomNeonColor, // This is a simple helper, safe here
-        setPlayers, setGameId, setStakeAmount, setOnChainGameStatus, setGameContractTimestamp, setIsReady,
-        setGameStarted
-        // Note: resetGameLocally, broadcastToClients, disconnectPeer, checkAllPlayersStaked, callStake, checkAndSubmitResult are accessed via refs now
-    ]);
-    useEffect(() => { handleP2PMessageRef.current = handleP2PMessage; }, [handleP2PMessage]);
 
-    const setupConnectionListeners = useCallback((conn) => {
-        conn.on('data', (data) => {
-            console.log(`Data received from ${conn.peer}:`, data);
-            handleP2PMessageRef.current?.(data, conn.peer); // Use ref
-        });
-
-        conn.on('open', () => {
-            clearTimeout(connectionTimeout);
-            console.log(`%cData connection OPEN with ${conn.peer}`, 'color: blue; font-weight: bold;');
-            if (!isHost) {
-                toast.success(`Connected to room ${roomCode}!`);
-                console.log("Client: Sending RequestRoomState with address", walletAddress);
-                conn.send({ type: 'RequestRoomState', payload: { address: walletAddress } });
-            }
-        });
-
-        conn.on('close', () => {
-            console.warn(`Data connection CLOSED with ${conn.peer}`);
-            toast.warn(`Player ${conn.peer.slice(0, 6)}... disconnected.`);
-            if (isHost) {
-                const leavingPlayer = players.find(p => p.peerId === conn.peer);
-                delete clientConnectionsRef.current[conn.peer];
-                if (leavingPlayer) {
-                    setPlayers(prev => prev.filter(p => p.peerId !== conn.peer));
-                    broadcastToClientsRef.current?.({ type: 'PlayerLeft', payload: { peerId: conn.peer, address: leavingPlayer.address } }); // Use ref
-                }
-            } else {
-                if (conn.peer === roomCode) {
-                    toast.error("Lost connection to host!");
-                    disconnectPeerRef.current?.(); // Use ref
-                }
-            }
-        });
-
-        conn.on('error', (err) => {
-            console.error(`Data connection error with ${conn.peer}:`, err);
-            toast.error(`P2P connection error: ${err.type}`);
-        });
-    }, [
-        // Update dependencies - handleP2PMessage is stable via ref, refs handle others
-        isHost, players, roomCode, walletAddress, setPlayers // Added setPlayers
-        // Removed handleP2PMessage, disconnectPeer, broadcastToClients as they are accessed via refs inside
-    ]);
-    useEffect(() => { setupConnectionListenersRef.current = setupConnectionListeners; }, [setupConnectionListeners]);
-
-    // 2. Fix the PeerJS initialization function to handle connections better
-    const initializePeer = useCallback((id) => {
-        if (peerRef.current) {
-            console.log("Destroying existing PeerJS instance before initializing new one.");
-            peerRef.current.destroy();
+        if (roomCode) {
+            console.log("createRoom: Already in a room, disconnecting first.");
+            await disconnectRoomRef.current?.(); // Use the ref
+            await new Promise(resolve => setTimeout(resolve, 300)); // Short delay
         }
-        console.log(`Initializing PeerJS with ID: ${id}`);
-        localPeerIdRef.current = id; // Store intended ID initially
 
-        try { // Start of try block
-            const peerJsConfig = {
-                debug: 2,
-                config: {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                    ],
-                }
+        setIsConnecting(true);
+        setConnectionState('connecting');
+        let newRoomCode = '';
+
+        try {
+
+            // Generate room code and game ID
+            const newRoomCode = Math.floor(100000 + Math.random() * 900000).toString();
+            const newGameId = generateGameId(newRoomCode);
+
+            // Create host player data
+            const hostPlayer = {
+                address: walletAddress,
+                ready: false,
+                color: getRandomNeonColor(),
+                hasStakedLocally: false,
+                signature: null,
+                isBot: false
             };
 
-            const peer = new Peer(id, peerJsConfig);
-            peerRef.current = peer;
-
-            peer.on('open', (peerId) => {
-                console.log(`%cPeerJS connection to signaling server OPEN. My Peer ID is: ${peerId}`, 'color: green; font-weight: bold;');
-                localPeerIdRef.current = peerId;
-                if (isHost && peerId === roomCode) {
-                    setPlayers(prev => prev.map(p => p.address === walletAddress ? { ...p, peerId: peerId } : p));
-                }
-                toast.info(`P2P Active: ${peerId.slice(0, 10)}...`);
+            // Create room in Firebase
+            await createGameRoom(newRoomCode, {
+                ...hostPlayer,
+                gameId: newGameId,
+                stakeAmount: '0'
             });
+            console.log(`Firebase: Room ${newRoomCode} created.`);
 
-            peer.on('connection', (conn) => {
-                console.log(`Incoming connection request from ${conn.peer}`);
-                const thisPeerId = localPeerIdRef.current;
-                const amITheHost = thisPeerId && !thisPeerId.startsWith('client-');
 
-                console.log(`Connection check: My Confirmed Peer ID = ${thisPeerId}, Am I Host? = ${amITheHost}`);
+            // Setup disconnect handler
+            await setupDisconnect(newRoomCode, walletAddress, true);
+            console.log(`Firebase: Disconnect handler set for host.`);
 
-                if (amITheHost) {
-                    console.log(`Host: Accepting connection from ${conn.peer}`);
-                    clientConnectionsRef.current[conn.peer] = conn;
-                    setupConnectionListenersRef.current?.(conn);
-                } else {
-                    console.warn("Client received unexpected connection request. Rejecting.");
-                    conn.close();
-                }
-            });
+            // Update local state
+            setRoomCode(newRoomCode);
+            setGameId(newGameId);
+            setIsHost(true);
+            // setPlayers([{ ...hostPlayer, address: walletAddress }]);
 
-            peer.on('disconnected', () => {
-                console.warn('PeerJS DISCONNECTED from signaling server. Attempting to reconnect...');
-                toast.warn("P2P signaling connection lost. Reconnecting...");
-                // PeerJS attempts reconnection automatically by default
-            });
+            // Subscribe to room updates
+            if (roomSubscriptionRef.current) roomSubscriptionRef.current(); // Unsubscribe old one if any
+            console.log(`RaceContext: Subscribing to new room ${newRoomCode} after creation.`);
+            roomSubscriptionRef.current = subscribeToRoom(newRoomCode, handleRoomUpdate); // Use the stable callback
 
-            peer.on('close', () => {
-                console.error('PeerJS connection to signaling server CLOSED permanently.');
-                toast.error("P2P connection closed.");
-                disconnectPeerRef.current?.();
-            });
-
-            peer.on('error', (err) => {
-                console.error('PeerJS Error:', err);
-                toast.error(`P2P Error: ${err.type}`);
-                if (err.type === 'unavailable-id') {
-                    toast.error(`Room code ${id} is already in use. Try creating again.`);
-                    disconnectPeerRef.current?.();
-                } else if (err.type === 'peer-unavailable') {
-                    const targetPeerId = err.message?.match(/Could not connect to peer\s(.*?)$/)?.[1] || id;
-                    toast.error(`Could not find room ${targetPeerId}. It may not exist or host is offline.`);
-                    disconnectPeerRef.current?.();
-                } else if (err.type === 'network' || err.type === 'webrtc') {
-                    toast.error('Network/WebRTC error preventing P2P connection. Check internet/firewall.');
-                    // Consider if disconnect is needed here
-                }
-                // Consider calling disconnectPeerRef.current?.() for other critical errors too
-            });
-
-        // --- FIX: Add the missing catch block ---
+            setConnectionState('connected');
+            setIsConnecting(false);
+            toast.success(`Room ${newRoomCode} created!`);
+            console.log("createRoom process complete.");
+            return newRoomCode;
         } catch (error) {
-            console.error("Failed to initialize PeerJS:", error);
-            toast.error("Failed to initialize P2P system.");
-            disconnectPeerRef.current?.(); // Ensure cleanup on initialization failure
+            console.error("Error creating room:", error);
+            toast.error("Failed to create room. Try again.");
+            setConnectionState('error');
+            setIsConnecting(false);
+            if (roomCode === newRoomCode) {
+                await disconnectRoomRef.current?.();
+           }
+           return null;
         }
-        // --- End Fix ---
+    }, [walletAddress, roomCode, handleRoomUpdate]);
 
-    }, [isHost, walletAddress, roomCode, setPlayers]); // Dependencies
-
-    // 7. Room Management
-    const createRoom = useCallback(() => {
+    const joinRoom = useCallback(async (code) => {
         if (!walletAddress) {
-            toast.error("Connect wallet first!"); return null;
-        }
-        if (peerRef.current) {
-            toast.warn("Already in a room or P2P active. Disconnect first."); return null;
+            toast.error("Connect wallet first!");
+            return false;
         }
 
-        const newRoomCode = Math.floor(100000 + Math.random() * 900000).toString();
-        const newGameId = generateGameId(newRoomCode);
-
-        setRoomCode(newRoomCode);
-        setGameId(newGameId);
-        setIsHost(true);
-        const hostPlayer = {
-            address: walletAddress,
-            peerId: newRoomCode, // Host's PeerJS ID is the room code
-            ready: false,
-            color: getRandomNeonColor(),
-            hasStakedLocally: false,
-            signature: null,
-            isBot: false
-        };
-        setPlayers([hostPlayer]);
-        resetGameLocallyRef.current?.(newGameId); // Use ref
-
-        initializePeer(newRoomCode); // Call initializePeer directly
-
-        toast.success(`Room ${newRoomCode} created! Share the code.`);
-        return newRoomCode; // Return code for navigation
-    }, [walletAddress, initializePeer, setRoomCode, setGameId, setIsHost, setPlayers]); // Removed resetGameLocally from deps
-
-    // 1. Fix the joinRoom function to ensure connection happens after PeerJS is fully initialized
-const joinRoom = useCallback((code) => {
-  if (!walletAddress) {
-    toast.error("Connect wallet first!"); return;
-  }
-  if (peerRef.current) {
-    toast.warn("Already in a room or P2P active. Disconnect first."); return;
-  }
-  if (!code || code.length !== 6 || !/^\d{6}$/.test(code)) {
-    toast.error("Invalid room code format."); return;
-  }
-
-  setRoomCode(code);
-  setIsHost(false);
-  resetGameLocallyRef.current?.(null);
-
-  // Generate a unique PeerJS ID for the client
-  const clientPeerId = `client-${sanitizeForPeerId(walletAddress.slice(2, 10))}-${Date.now().toString().slice(-5)}`;
-  const joiningPlayer = {
-    address: walletAddress,
-    peerId: clientPeerId,
-    ready: false,
-    color: getRandomNeonColor(),
-    hasStakedLocally: false,
-    signature: null,
-    isBot: false
-  };
-  setPlayers([joiningPlayer]);
-
-  toast.info(`Attempting to join room ${code}...`);
-  
-  // Initialize PeerJS first with improved waiting logic
-  initializePeer(clientPeerId);
-  
-  // Create a connection attempt function with better timing
-  const attemptConnection = () => {
-    if (!peerRef.current) {
-      console.error("PeerJS not initialized");
-      toast.error("P2P initialization failed. Cannot join room.");
-      disconnectPeerRef.current?.();
-      return;
-    }
-    
-    console.log(`Client: Attempting to connect to host Peer ID: ${code}`);
-    try {
-      // Explicitly check if peer is open before connecting
-      if (!peerRef.current.open) {
-        console.log("PeerJS not connected to signaling server yet. Waiting...");
-        // Try again in 1 second (with a counter to limit attempts)
-        if (!window.connectionAttempts) window.connectionAttempts = 0;
-        window.connectionAttempts++;
-        
-        if (window.connectionAttempts < 15) { // Maximum 15 attempts (15 seconds)
-          setTimeout(attemptConnection, 1000);
-        } else {
-          console.error("Failed to connect to PeerJS signaling server after 15 attempts");
-          toast.error("Connection to PeerJS server failed. Please try again later.");
-          disconnectPeerRef.current?.();
-          window.connectionAttempts = 0;
+        if (roomCode === code) {
+            console.log("Already in this room. No need to join again.");
+            return true;
         }
-        return;
-      }
-      
-      window.connectionAttempts = 0; // Reset counter on success
-      
-      console.log(`Client: PeerJS ready! My ID: ${peerRef.current.id}, connecting to host: ${code}`);
-      const conn = peerRef.current.connect(code, { 
-        reliable: true, 
-        serialization: 'json',
-        metadata: { clientAddress: walletAddress }
-      });
-      
-      if (conn) {
-        console.log("Client: Connection object created, setting up listeners...");
-        hostConnectionRef.current = conn;
-        
-        // Clear any existing timeout first
-        if (window.connectionTimeout) {
-          clearTimeout(window.connectionTimeout);
+
+        if (roomCode && roomCode !== code) {
+            console.log("joinRoom: In a different room, disconnecting first.");
+            await disconnectRoomRef.current?.(); // Use the ref
+            await new Promise(resolve => setTimeout(resolve, 300)); // Short delay
         }
-        
-        // Setup basic listeners right away
-        conn.on('open', () => {
-          clearTimeout(window.connectionTimeout);  // Clear timeout again to be safe
-          console.log(`%cData connection OPEN with host ${conn.peer}`, 'color: blue; font-weight: bold;');
-          toast.success(`Connected to room ${code}!`);
-          console.log("Client: Sending RequestRoomState with address", walletAddress);
-          conn.send({ type: 'RequestRoomState', payload: { address: walletAddress } });
-        });
-        
-        // Use the setupConnectionListeners function for consistent listener setup
-        setupConnectionListenersRef.current?.(conn);
-        
-        // Set up a connection timeout with a global reference
-        window.connectionTimeout = setTimeout(() => {
-          if (conn && !conn.open) {
-            console.error("Connection to host timed out after 10 seconds");
-            toast.error("Connection to host timed out. Please try again.");
-            disconnectPeerRef.current?.();
-          }
-        }, 10000);
-      } else {
-        console.error("peer.connect() returned null/undefined");
-        toast.error("Failed to initiate connection to host.");
-        disconnectPeerRef.current?.();
-      }
-    } catch (error) {
-      console.error("Error during peer.connect():", error);
-      toast.error("Error trying to connect to host.");
-      disconnectPeerRef.current?.();
-    }
-  };
 
-  // Wait a bit for PeerJS to initialize before trying to connect
-  setTimeout(attemptConnection, 2000);
-}, [walletAddress, initializePeer, setRoomCode, setIsHost, setPlayers]);
+        if (!code || code.length !== 6 || !/^\d{6}$/.test(code)) {
+            toast.error("Invalid room code format.");
+            return false;
+        }
 
+            setIsConnecting(true);
+            setConnectionState('connecting');
+            // Check if room exists
+            try {
+            const roomExists = await checkRoomExists(code);
+            if (!roomExists) {
+                toast.error(`Room ${code} doesn't exist!`);
+                setConnectionState('error');
+                setIsConnecting(false);
+                return false;
+            }
 
-    // 8. UI Callbacks & Game State Changers
+            // Create player data
+            const playerData = {
+                address: walletAddress,
+                ready: false,
+                color: getRandomNeonColor(),
+                hasStakedLocally: false,
+                signature: null,
+                isBot: false
+            };
+
+            // Join room in Firebase
+            await joinGameRoom(code, playerData);
+            console.log(`Firebase: Player ${walletAddress} added to room ${code}.`);
+
+            // Setup disconnect handler
+            await setupDisconnect(code, walletAddress, false);
+            console.log(`Firebase: Disconnect handler set for joiner.`);
+
+            // Update minimal local state
+            setRoomCode(code);
+            setIsHost(false);
+            // DO NOT set players here - rely on subscription
+
+            // Subscribe using the stable callback
+            if (roomSubscriptionRef.current) roomSubscriptionRef.current(); // Unsubscribe old one if any
+            console.log(`RaceContext: Subscribing to room ${code} after joining.`);
+            roomSubscriptionRef.current = subscribeToRoom(code, handleRoomUpdate); // Use the stable callback
+
+            // Small delay to allow subscription to potentially fire once
+            await new Promise(resolve => setTimeout(resolve, 150));
+
+            setConnectionState('connected');
+            setIsConnecting(false);
+            toast.success(`Joined room ${code}!`);
+            console.log("Join room process complete.");
+            return true;
+
+        } catch (error) {
+            console.error("Error joining room:", error);
+            toast.error("Failed to join room.");
+            setConnectionState('error');
+            setIsConnecting(false);
+            // Attempt cleanup if room was partially joined locally
+            if (roomCode === code) {
+                 await disconnectRoomRef.current?.();
+            }
+            return false;
+        }
+    // Add handleRoomUpdate dependency
+    }, [walletAddress, roomCode, handleRoomUpdate, isReady, hasStakedLocally]);
+    // 6. Game Actions
     const setPlayerStake = useCallback((amount) => {
         if (!isHost || onChainGameStatus > 0) {
             toast.warn("Stake can only be set by the host before the game is created.");
             return;
         }
+
         const parsedAmount = parseFloat(amount);
         if (isNaN(parsedAmount) || parsedAmount < 0) {
             toast.warn("Invalid stake amount.");
             setStakeAmount('0');
+
+            // Update Firebase
+            if (roomCode) {
+                updateGameData(roomCode, { stakeAmount: '0' }).catch(err => {
+                    console.error("Error updating stake amount:", err);
+                });
+            }
         } else {
             setStakeAmount(amount);
-            // Optionally broadcast stake change to clients immediately?
-            // broadcastToClientsRef.current?.({ type: 'StakeAmountUpdate', payload: { amount } });
+
+            // Update Firebase
+            if (roomCode) {
+                updateGameData(roomCode, { stakeAmount: amount }).catch(err => {
+                    console.error("Error updating stake amount:", err);
+                });
+            }
         }
-    }, [isHost, onChainGameStatus, setStakeAmount]); // Added setStakeAmount
+    }, [isHost, onChainGameStatus, roomCode]);
 
     const setPlayerReady = useCallback(async (ready) => {
         if (isProcessing) {
-            toast.warn("Please wait for the current action to complete."); return;
+            toast.warn("Please wait for the current action to complete.");
+            return;
         }
+
         if (ready) {
             const currentStake = parseFloat(stakeAmount);
-             if (isNaN(currentStake) || currentStake <= 0) {
-                 toast.warn("Stake amount must be set to a value greater than 0 before readying up.");
-                 return;
-             }
-        }
-
-        setIsReady(ready); // Update local state immediately
-        setPlayers(prev =>
-            prev.map(player =>
-                player.peerId === localPeerIdRef.current ? { ...player, ready } : player
-            )
-        );
-
-        // Send update via P2P
-        if (isHost) {
-            broadcastToClientsRef.current?.({ type: 'PlayerUpdate', payload: { peerId: localPeerIdRef.current, data: { ready } } }); // Use ref
-        } else {
-            sendToHost({ type: 'ClientUpdate', payload: { data: { ready } } }); // Fine
-        }
-
-        // Trigger contract actions if readying up
-        if (ready) {
-            if (onChainGameStatus === 1) {
-                await callStakeRef.current?.(); // Use ref
-            } else if (onChainGameStatus === 0 && isHost) {
-                await callCreateGame(); // Fine (assuming callCreateGame doesn't cause issues)
-            } else if (onChainGameStatus === 0 && !isHost) {
-                toast.info("Ready! Waiting for host to create the game on chain.");
+            if (isNaN(currentStake) || currentStake <= 0) {
+                toast.warn("Stake amount must be set to a value greater than 0 before readying up.");
+                return;
             }
-        } else {
-            console.log("Player marked as not ready.");
         }
-    }, [isProcessing, stakeAmount, onChainGameStatus, isHost, sendToHost, callCreateGame, setIsReady, setPlayers]); // Removed broadcastToClients, callStake from deps
+
+        // Update local state first for responsiveness
+        setIsReady(ready);
+
+        // Update Firebase
+        try {
+            await updatePlayerData(roomCode, walletAddress, { ready });
+
+            // If host is readying up, potentially create game on chain
+            if (ready && isHost && onChainGameStatus === 0) {
+                await callCreateGame();
+            }
+
+            // If player is readying up and game exists, stake
+            if (ready && onChainGameStatus === 1) {
+                await callStakeRef.current?.();
+            }
+        } catch (error) {
+            console.error("Error updating ready state:", error);
+            toast.error("Failed to update ready state.");
+
+            // Revert local state
+            setIsReady(!ready);
+        }
+    }, [isProcessing, stakeAmount, onChainGameStatus, isHost, walletAddress, roomCode, callCreateGame]);
 
     const addBotPlayer = useCallback(() => {
         if (!isHost) return;
         if (players.length >= MAX_PLAYERS) {
-             toast.warn(`Cannot exceed ${MAX_PLAYERS} players.`);
-             return;
+            toast.warn(`Cannot exceed ${MAX_PLAYERS} players.`);
+            return;
         }
+
         const botAddress = `0xBot${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
         const newBot = {
             address: botAddress,
-            peerId: botAddress, // Use address as unique ID for simplicity
-            ready: true, // Bots are always ready
+            ready: true,
             color: getRandomNeonColor(),
             isBot: true,
-            hasStakedLocally: true, // Assume bots 'staked' (no real funds)
+            hasStakedLocally: true,
             signature: null
         };
-        setPlayers(prev => [...prev, newBot]);
-        broadcastToClientsRef.current?.({ type: 'PlayerJoined', payload: newBot }); // Use ref
-    }, [isHost, players, setPlayers]); // Removed broadcastToClients from deps
+
+        // Add directly to Firebase - the subscription will update local state
+        if (roomCode) {
+            updatePlayerData(roomCode, botAddress, newBot).catch(err => {
+                console.error("Error adding bot:", err);
+                toast.error("Failed to add bot player.");
+            });
+        }
+    }, [isHost, players.length, roomCode]);
 
     const startGame = useCallback(() => {
-        console.log("startGame function called (should be triggered by P2P/contract event)");
-        if (gameStarted) return;
+        if (gameStarted || !isHost) return;
 
-        if (players.some(p => p.isBot) && isHost) {
-             console.log("Starting bot game locally (Host override)");
-             setGameStarted(true);
-             setOnChainGameStatus(2); // Assume InProgress for bot games
-             broadcastToClientsRef.current?.({ type: 'StartRace' }); // Use ref
+        if (players.some(p => p.isBot)) {
+            console.log("Starting bot game locally");
+
+            // Update Firebase
+            if (roomCode) {
+                updateGameData(roomCode, {
+                    gameStarted: true,
+                    onChainGameStatus: 2 // Assume InProgress for bot games
+                }).catch(err => {
+                    console.error("Error updating game start state:", err);
+                });
+            }
+
+            setGameStarted(true);
+            setOnChainGameStatus(2);
         } else if (onChainGameStatus === 2) {
-             setGameStarted(true);
+            // Just update Firebase
+            if (roomCode) {
+                updateGameData(roomCode, { gameStarted: true }).catch(err => {
+                    console.error("Error updating game start state:", err);
+                });
+            }
+            setGameStarted(true);
         } else {
-             console.warn("Cannot start game - conditions not met (not host, or contract not InProgress).");
-             if (isHost) checkAllPlayersStakedRef.current?.(); // Use ref
+            console.warn("Cannot start game - conditions not met (contract not InProgress).");
+            checkAllPlayersStakedRef.current?.();
         }
-    }, [gameStarted, isHost, players, onChainGameStatus, setGameStarted, setOnChainGameStatus]); // Removed checkAllPlayersStaked, broadcastToClients from deps
+    }, [gameStarted, isHost, players, onChainGameStatus, roomCode]);
 
     const endGame = useCallback(async (winnerAddress) => {
-        if (gameEnded) return; // Prevent multiple calls
+        if (gameEnded) return;
 
         console.log("Attempting to end game. Winner:", winnerAddress);
-        setWinner(winnerAddress); // Set winner address in state
-        setGameEnded(true);       // Mark game as ended locally
+        setWinner(winnerAddress);
+        setGameEnded(true);
+
+        // Update Firebase
+        if (roomCode) {
+            updateGameData(roomCode, {
+                gameEnded: true,
+                winner: winnerAddress
+            }).catch(err => {
+                console.error("Error updating game end state:", err);
+            });
+        }
+
         toast.info(`Race finished! Winner: ${winnerAddress.slice(0, 6)}...`);
 
+        // Handle contract for real players (not bots)
         if (contract && onChainGameStatus === 2 && !players.some(p => p.isBot)) {
             setIsProcessing(true);
             toast.info("Collecting signatures for result submission...");
+
             try {
                 let finalTimestamp = gameContractTimestamp;
                 if (!finalTimestamp && contract.games) {
@@ -1045,42 +816,62 @@ const joinRoom = useCallback((code) => {
                         const gameData = await contract.games(gameId);
                         finalTimestamp = typeof gameData.createdAt === 'bigint' ? Number(gameData.createdAt) : gameData.createdAt.toNumber();
                         setGameContractTimestamp(finalTimestamp);
+
+                        // Update Firebase
+                        if (roomCode) {
+                            updateGameData(roomCode, { gameContractTimestamp: finalTimestamp }).catch(err => {
+                                console.error("Error updating game timestamp:", err);
+                            });
+                        }
                     } catch (tsError) {
-                         console.error("Failed to fetch game creation timestamp:", tsError);
-                         toast.error("Failed to get game timestamp for signing.");
-                         setIsProcessing(false);
-                         return;
+                        console.error("Failed to fetch game creation timestamp:", tsError);
+                        toast.error("Failed to get game timestamp for signing.");
+                        setIsProcessing(false);
+                        return;
                     }
                 }
+
                 if (!finalTimestamp) {
-                     toast.error("Game creation timestamp missing. Cannot sign result.");
-                     setIsProcessing(false);
-                     return;
+                    toast.error("Game creation timestamp missing. Cannot sign result.");
+                    setIsProcessing(false);
+                    return;
                 }
 
-                const chainId = (await signer.provider.getNetwork()).chainId;
-                const messageHasher = typeof ethers.solidityPackedKeccak256 === 'function' ? ethers.solidityPackedKeccak256 : ethers.utils.solidityKeccak256;
-                const messageHash = messageHasher(
-                    ["bytes32", "address", "address", "uint256", "uint256"],
-                    [gameId, winnerAddress, CONTRACT_ADDRESS, chainId, BigInt(finalTimestamp)] // Ensure timestamp is BigInt for ethers v6
-                );
-                const ethSignedMessagePrefix = "\x19Ethereum Signed Message:\n32";
-                const ethSignedMessageHash = messageHasher(
-                    ["string", "bytes32"],
-                    [ethSignedMessagePrefix, messageHash]
-                );
-
+                // If current player is the winner, wait for signatures
+                // If not, generate signature and update Firebase
                 if (walletAddress !== winnerAddress) {
+                    const chainId = (await signer.provider.getNetwork()).chainId;
+                    const messageHasher = typeof ethers.solidityPackedKeccak256 === 'function'
+                        ? ethers.solidityPackedKeccak256
+                        : ethers.utils.solidityKeccak256;
+
+                    const messageHash = messageHasher(
+                        ["bytes32", "address", "address", "uint256", "uint256"],
+                        [gameId, winnerAddress, CONTRACT_ADDRESS, chainId, BigInt(finalTimestamp)]
+                    );
+
+                    const ethSignedMessagePrefix = "\x19Ethereum Signed Message:\n32";
+                    const ethSignedMessageHash = messageHasher(
+                        ["string", "bytes32"],
+                        [ethSignedMessagePrefix, messageHash]
+                    );
+
                     console.log("Signing result hash:", ethSignedMessageHash);
-                    const signature = await signer.signMessage(ethers.getBytes(ethSignedMessageHash)); // Use getBytes for v6+
+                    const signature = await signer.signMessage(ethers.getBytes ? ethers.getBytes(ethSignedMessageHash) : ethSignedMessageHash);
                     console.log("My Signature:", signature);
-                    setPlayers(prev => prev.map(p => p.peerId === localPeerIdRef.current ? { ...p, signature: signature } : p));
-                    sendToHost({ type: 'ClientSignature', payload: { signature } }); // Fine
-                    toast.info("Signature sent to host.");
+
+                    // Update signature in Firebase
+                    if (roomCode) {
+                        await updatePlayerData(roomCode, walletAddress, { signature });
+                    }
+
+                    toast.info("Signature sent to winner.");
                     setIsProcessing(false);
                 } else {
+                    // I'm the winner - check for existing signatures or wait
                     console.log("Winner: Waiting for signatures from other players...");
-                    checkAndSubmitResultRef.current?.(); // Use ref
+                    checkAndSubmitResultRef.current?.();
+                    setIsProcessing(false);
                 }
             } catch (error) {
                 console.error("Error during signature process:", error);
@@ -1088,65 +879,91 @@ const joinRoom = useCallback((code) => {
                 setIsProcessing(false);
             }
         } else {
-             console.log("Game ended (Bot game or contract not involved/ready). No signatures needed.");
-             setIsProcessing(false);
+            console.log("Game ended (Bot game or contract not involved/ready). No signatures needed.");
         }
-    }, [
-        gameEnded, contract, onChainGameStatus, players, gameId, gameContractTimestamp,
-        walletAddress, winner, signer, // Winner state is set just before this call
-        sendToHost, // Fine
-        setWinner, setGameEnded, setIsProcessing, setGameContractTimestamp, setPlayers // State setters
-        // Removed checkAndSubmitResult from deps
-    ]);
+    }, [gameEnded, contract, onChainGameStatus, players, gameId, gameContractTimestamp, walletAddress, winner, signer, roomCode]);
 
     const resetGameForNextRound = useCallback(() => {
         if (!isHost) {
             toast.warn("Only the host can start a new round.");
             return;
         }
-        console.log("Host: Resetting game for next round.");
-        const newGameId = generateGameId(roomCode); // Generate new ID for the next game
-        resetGameLocallyRef.current?.(newGameId); // Use ref
-        toast.info("Ready for a new race!");
-        broadcastToClientsRef.current?.({ type: 'GameReset', payload: { newGameId } }); // Use ref
-    }, [isHost, roomCode]); // Removed resetGameLocally, broadcastToClients from deps
 
-    // 9. useEffect Hooks
+        console.log("Host: Resetting game for next round.");
+        const newGameId = generateGameId(roomCode);
+
+        // Update Firebase with new game state
+        if (roomCode) {
+            updateGameData(roomCode, {
+                gameId: newGameId,
+                gameStarted: false,
+                gameEnded: false,
+                winner: null,
+                onChainGameStatus: 0,
+                gameContractTimestamp: null
+            }).then(() => {
+                // Reset all players' ready and staked states
+                const playerUpdates = players.reduce((updates, player) => {
+                    if (!player.isBot) {
+                        updates[`players/${player.address}/ready`] = false;
+                        updates[`players/${player.address}/hasStakedLocally`] = false;
+                        updates[`players/${player.address}/signature`] = null;
+                    }
+                    return updates;
+                }, {});
+
+                return updateGameData(roomCode, playerUpdates);
+            }).catch(err => {
+                console.error("Error resetting game:", err);
+                toast.error("Failed to reset game.");
+            });
+        }
+
+        resetGameLocallyRef.current?.(newGameId);
+        toast.info("Ready for a new race!");
+    }, [isHost, roomCode, players]);
+
+    // 9. useEffect Hooks for setup and cleanup
+
+    // Wallet connection/disconnection
     useEffect(() => {
         const handleAccountsChanged = async (accounts) => {
             console.log("RaceContext: accountsChanged event detected", accounts);
             if (accounts.length === 0) {
                 toast.info("Wallet disconnected.");
-                setWalletAddress(""); setBalance("0"); setSigner(null); setContract(null);
-                disconnectPeerRef.current?.(); // Use ref
+                setWalletAddress("");
+                setBalance("0");
+                setSigner(null);
+                setContract(null);
+                disconnectRoomRef.current?.();
             } else if (accounts[0] !== walletAddress) {
                 toast.info("Wallet account changed. Re-initializing...");
-                disconnectPeerRef.current?.(); // Use ref
+                disconnectRoomRef.current?.();
                 setTimeout(async () => {
-                    await connectWallet(); // Fine
+                    await connectWallet();
                 }, 100);
             }
         };
 
         const checkInitialConnection = async () => {
-             if (window.ethereum) {
-                 const wasDisconnected = localStorage.getItem('walletDisconnected') === 'true';
-                 if (!wasDisconnected) {
-                     try {
-                         const accounts = await window.ethereum.request({ method: "eth_accounts" });
-                         if (accounts.length > 0) {
-                             console.log("RaceContext: Found existing wallet connection.");
-                             await connectWallet(); // Fine
-                         } else {
-                              console.log("RaceContext: No existing wallet connection found.");
-                         }
-                     } catch (error) {
-                         console.error("Error checking initial wallet connection:", error);
-                     }
-                 } else {
-                      console.log("RaceContext: Wallet was previously disconnected manually.");
-                 }
-             }
+            if (window.ethereum) {
+                const wasDisconnected = localStorage.getItem('walletDisconnected') === 'true';
+                if (!wasDisconnected) {
+                    try {
+                        const accounts = await window.ethereum.request({ method: "eth_accounts" });
+                        if (accounts.length > 0) {
+                            console.log("RaceContext: Found existing wallet connection.");
+                            await connectWallet();
+                        } else {
+                            console.log("RaceContext: No existing wallet connection found.");
+                        }
+                    } catch (error) {
+                        console.error("Error checking initial wallet connection:", error);
+                    }
+                } else {
+                    console.log("RaceContext: Wallet was previously disconnected manually.");
+                }
+            }
         };
         checkInitialConnection();
 
@@ -1158,24 +975,40 @@ const joinRoom = useCallback((code) => {
             if (window.ethereum?.removeListener) {
                 window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
             }
-            // Disconnect PeerJS when the provider unmounts
-            // disconnectPeerRef.current?.(); // Consider if this cleanup is too aggressive
         };
-    }, [walletAddress, connectWallet]); // Removed disconnectPeer from deps
+    }, [walletAddress, connectWallet]);
+
+    // Clean up Firebase subscription when provider unmounts
+    useEffect(() => {
+        return () => {
+            if (roomSubscriptionRef.current) {
+                roomSubscriptionRef.current();
+            }
+
+            // If in a room when unmounting, leave it
+            if (roomCode && walletAddress) {
+                leaveGameRoom(roomCode, walletAddress).catch(console.error);
+            }
+        };
+    }, [roomCode, walletAddress]);
 
     // --- Context Value ---
     const value = {
         // State
-        walletAddress, balance, signer, contract, roomCode, players, isHost,
-        stakeAmount, isReady, gameId, onChainGameStatus, gameStarted, gameEnded,
+        walletAddress, balance, signer, contract, roomCode, players, isHost, // Ensure 'players' is here
+        stakeAmount, isReady, hasStakedLocally,
+        gameId, onChainGameStatus, gameStarted, gameEnded,
         winner, currentLap, totalLaps, isProcessing, gameContractTimestamp,
+        connectionState, isConnecting,
 
-        // Functions (Provide original functions, not refs)
+        // Functions (ensure all needed functions are included)
+        connectWallet, disconnectWallet, // Assuming these exist
         createRoom, joinRoom, setPlayerStake, setPlayerReady, addBotPlayer,
         startGame, endGame, setCurrentLap,
-        resetGame: resetGameForNextRound,
-        disconnectPeer, // Provide the original disconnectPeer
-    };
+        resetGame: resetGameForNextRound, // Assuming this exists
+        disconnectPeer: disconnectRoomRef.current // Provide the function via ref
+   };
+   console.log('%c RaceContext Provider Value:', 'color: blue; font-weight: bold;', value);
 
     return (
         <RaceContext.Provider value={value}>

@@ -1,95 +1,84 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { useEffect, useState, useRef } from 'react';
+import { useParams, Navigate, useNavigate } from 'react-router-dom';
 import { useRaceContext } from '../../context/RaceContext';
-import { ToastContainer, toast } from 'react-toastify'; // Ensure ToastContainer is imported
+// Removed RoomLobby import
+import RaceGame from './RaceGame';
+import { toast } from 'react-toastify';
+import { motion } from 'framer-motion'; // Import motion
 
-export default function GameRoom() {
+// --- Game Lobby UI Component ---
+const GameLobbyUI = () => {
     const {
-        walletAddress,
-        roomCode,
-        players,
-        isHost,
-        stakeAmount,
-        isReady,
-        gameStarted,
-        setPlayerStake,
-        setPlayerReady,
-        addBotPlayer,
-        isProcessing,
-        onChainGameStatus,
-        disconnectPeer, // Function to leave room/disconnect P2P
-        totalLaps // Get total laps from context
+        players, roomCode, isHost, stakeAmount, setPlayerStake,
+        isReady, setPlayerReady, addBotPlayer, startGame,
+        walletAddress, isProcessing, onChainGameStatus, totalLaps,
+        disconnectPeer // Assuming disconnectPeer is the function to leave the room
     } = useRaceContext();
-
-    const { roomCode: urlRoomCode } = useParams();
     const navigate = useNavigate();
-    const [singlePlayerMode, setSinglePlayerMode] = useState(false);
-
-    useEffect(() => {
-        // Redirect if context roomCode doesn't match URL or is missing after mount
-        if (!roomCode || (roomCode && roomCode !== urlRoomCode)) {
-            console.warn("Redirecting: Room code mismatch or missing.", { context: roomCode, url: urlRoomCode });
-            // disconnectPeer(); // Clean up P2P if redirecting
-            navigate('/race');
-        }
-    }, [roomCode, urlRoomCode, navigate]); // Removed disconnectPeer dependency to avoid loop
-
-    useEffect(() => {
-        // Navigate to game screen when gameStarted becomes true
-        if (gameStarted) {
-            console.log("Game started, navigating to game screen...");
-            navigate(`/race/game/${roomCode}`);
-        }
-    }, [gameStarted, navigate, roomCode]);
-
+    //const [singlePlayerMode, setSinglePlayerMode] = useState(false); // Example state for test mode
+    console.log(`%c GameLobbyUI Render:`, 'color: orange; font-weight: bold;', { 
+        playersFromContext: players, 
+        stakeAmountFromContext: stakeAmount,
+        roomCodeFromContext: roomCode,
+        isHostFromContext: isHost,
+        isReadyFromContext: isReady,
+        onChainGameStatusFromContext: onChainGameStatus
+    });
+    
     const handleStakeChange = (e) => {
-        setPlayerStake(e.target.value);
+        if (isHost && onChainGameStatus === 0) {
+            setPlayerStake(e.target.value);
+        }
     };
 
     const handleReadyToggle = () => {
-        // Context function now handles P2P and staking logic
+        // Prevent un-readying if game is already created/staked on chain
+        if (isReady && onChainGameStatus > 0) {
+            toast.warn("Cannot un-ready after game is created/staked on chain.");
+            return;
+        }
         setPlayerReady(!isReady);
     };
 
     const copyRoomCode = () => {
-        navigator.clipboard.writeText(roomCode);
-        toast.success("Room code copied!");
+        if (roomCode) {
+            navigator.clipboard.writeText(roomCode)
+                .then(() => toast.success("Room code copied!"))
+                .catch(() => toast.error("Failed to copy code."));
+        }
     };
 
     const handleLeaveRoom = () => {
-        disconnectPeer(); // Disconnect P2P and reset context state
-        navigate('/race'); // Go back to lobby selection
-        toast.info("Left the room.");
+        disconnectPeer();
+        navigate('/race'); // Navigate back to the main race lobby
     };
 
     const enableSinglePlayerMode = () => {
-        if (!isHost || singlePlayerMode) return;
         setSinglePlayerMode(true);
-        const botCount = Math.floor(Math.random() * 3) + 1;
-        for (let i = 0; i < botCount; i++) {
-            addBotPlayer(); // Context handles adding bot and P2P broadcast
-        }
-        // Automatically set stake for bot game?
-        setPlayerStake("0.01"); // Example stake for bot game
-        toast.info(`Test mode enabled with ${botCount} bot(s). Set stake and click Ready.`);
+        // Add bots automatically or provide a button
+        addBotPlayer(); // Example: Add one bot
+        toast.info("Test Mode Enabled: Added a bot. Add more if needed.");
     };
-
-    // Determine if the main action button should be enabled
-    const canInteract = !isProcessing;
-    const localPlayer = players.find(p => p.address === walletAddress);
 
     const getStatusMessage = () => {
-        if (isProcessing) return "Processing transaction...";
-        if (onChainGameStatus === 0 && isHost && !isReady) return "Set stake and click Ready to create game on chain.";
-        if (onChainGameStatus === 0 && !isHost) return "Waiting for host to create game...";
-        if (onChainGameStatus === 1 && !isReady) return "Game created. Click Ready to stake your MON.";
-        if (onChainGameStatus === 1 && isReady && !localPlayer?.hasStakedLocally) return "Staking...";
-        if (onChainGameStatus === 1 && isReady && localPlayer?.hasStakedLocally) return "Waiting for other players to stake...";
-        if (onChainGameStatus === 2) return "Starting game...";
-        return "";
+        if (isProcessing) return "Processing...";
+        if (onChainGameStatus === 0 && isHost && parseFloat(stakeAmount) <= 0) return "Host must set a stake amount > 0.";
+        if (onChainGameStatus === 0 && !isHost && parseFloat(stakeAmount) <= 0) return "Waiting for host to set stake amount.";
+        if (onChainGameStatus === 1 && !isReady) return "Game created. Click Ready to stake!";
+        if (onChainGameStatus === 1 && isReady) return "Staking in progress...";
+        if (onChainGameStatus === 2 && !isHost) return "All players staked. Waiting for host to start.";
+        if (onChainGameStatus === 2 && isHost && !players.every(p => p.ready)) return "All players staked. Waiting for players to ready up.";
+        if (onChainGameStatus === 2 && isHost && players.every(p => p.ready)) return "Ready to start the race!";
+        return ""; // Default empty message
     };
 
+    // Determine if user can interact with buttons
+    const canInteract = !isProcessing;
+    // Host can start if game is created (status 1 or 2), enough players, and all are ready
+    const canStartGame = isHost && 
+                         players.length >= 2 && 
+                         players.every(p => p.ready) && 
+                         (onChainGameStatus === 2 || (singlePlayerMode && onChainGameStatus === 0)); // Allow start in test mode immediately
 
     return (
         <div className="min-h-screen bg-[#0f0f1a] text-white flex flex-col">
@@ -122,7 +111,7 @@ export default function GameRoom() {
                     <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2"> {/* Added scroll */}
                         {players.map((player) => (
                             <div
-                                key={player.peerId || player.address} // Use peerId if available
+                                key={player.address} // Use address as key
                                 className={`flex items-center justify-between p-3 rounded-lg ${player.ready ? 'bg-[#1efaf3]/20' : 'bg-zinc-900/50'
                                     }`}
                             >
@@ -148,17 +137,16 @@ export default function GameRoom() {
                     {isHost && (
                         <div className="mt-6 text-center border-t border-zinc-700 pt-4">
                             <p className="text-[#e55a32] mb-2">You are the host</p>
-                            {players.filter(p => !p.isBot).length === 1 && !singlePlayerMode && onChainGameStatus === 0 && (
-                                <motion.button
-                                    whileHover={{ scale: 1.05 }}
-                                    whileTap={{ scale: 0.95 }}
-                                    onClick={enableSinglePlayerMode}
-                                    disabled={!canInteract}
-                                    className="mt-2 bg-[#ff3e9d] hover:bg-[#e02e7c] text-white font-bold py-2 px-4 rounded-lg disabled:opacity-50 text-sm"
-                                >
-                                    Test Mode (Add Bots)
-                                </motion.button>
-                            )}
+                            {/* Simplified Add Bot button */}
+                             <motion.button
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
+                                onClick={addBotPlayer}
+                                disabled={!canInteract || players.length >= 10} // Max players check
+                                className="mt-2 bg-purple-500 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg disabled:opacity-50 text-sm"
+                            >
+                                Add Bot
+                            </motion.button>
                         </div>
                     )}
                 </div>
@@ -193,7 +181,7 @@ export default function GameRoom() {
                                 whileHover={{ scale: canInteract ? 1.05 : 1 }}
                                 whileTap={{ scale: canInteract ? 0.95 : 1 }}
                                 onClick={handleReadyToggle}
-                                disabled={!canInteract || (isReady && onChainGameStatus > 1)}
+                                disabled={!canInteract || (isReady && onChainGameStatus > 0) || (parseFloat(stakeAmount) <= 0 && onChainGameStatus === 0)} // Disable ready if stake is 0 before creation
                                 className={`px-8 py-3 rounded-full font-bold text-lg w-48 ${isReady
                                         ? 'bg-red-600 hover:bg-red-700 text-white'
                                         : 'bg-[#00eff2] hover:bg-[#00c7cc] text-black'
@@ -204,6 +192,24 @@ export default function GameRoom() {
                             <p className="text-sm text-gray-400 mt-2 h-4">{getStatusMessage()}</p>
                         </div>
 
+                         {/* Start Game Button (Host Only) */}
+                         {isHost && (
+                            <div className="flex flex-col items-center border-t border-zinc-700 pt-4">
+                                <motion.button
+                                    whileHover={{ scale: canStartGame ? 1.05 : 1 }}
+                                    whileTap={{ scale: canStartGame ? 0.95 : 1 }}
+                                    onClick={startGame}
+                                    disabled={!canStartGame || isProcessing}
+                                    className="bg-[#ff3e9d] hover:bg-[#e02e7c] text-white font-bold py-3 px-6 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isProcessing ? "Processing..." : "Start Race"}
+                                </motion.button>
+                                {!canStartGame && onChainGameStatus === 2 && <p className="text-sm text-yellow-400 mt-2">Waiting for all players to be ready.</p>}
+                                {!canStartGame && onChainGameStatus < 2 && players.length < 2 && <p className="text-sm text-yellow-400 mt-2">Need at least 2 players to start.</p>}
+                            </div>
+                        )}
+
+
                         {/* Game Rules */}
                         <div className="border-t border-zinc-700 pt-4">
                             <h3 className="text-xl font-display text-[#1efaf3] mb-4">Game Rules</h3>
@@ -211,15 +217,112 @@ export default function GameRoom() {
                                 <li>Race consists of {totalLaps} laps.</li>
                                 <li>Use arrow keys to control your car.</li>
                                 <li>First player to complete all laps wins the pot.</li>
-                                <li>Winner takes all staked MON (contract fee: {0}%).</li> {/* Update if fee changes */}
+                                <li>Winner takes all staked MON (minus contract fee).</li>
                                 <li>Click Ready to confirm participation (and stake if game is created).</li>
                             </ul>
                         </div>
                     </div>
                 </div>
             </div>
-            {/* Ensure ToastContainer is rendered, maybe move to App.jsx */}
-            {/* <ToastContainer position="bottom-right" autoClose={5000} /> */}
         </div>
     );
+};
+// --- End Game Lobby UI ---
+
+
+// --- Main GameRoom Component ---
+export default function GameRoom() {
+    const { roomCode: roomId } = useParams();
+    // Destructure all necessary values from context
+    const { 
+        roomCode, joinRoom, gameStarted, disconnectPeer, isConnecting, 
+        // Add other context values needed by GameLobbyUI if not already included
+        players, isHost, stakeAmount, setPlayerStake, isReady, setPlayerReady, 
+        addBotPlayer, startGame, walletAddress, isProcessing, onChainGameStatus, totalLaps 
+    } = useRaceContext(); 
+    
+    const [isLoading, setIsLoading] = useState(true);
+    const [isJoining, setIsJoining] = useState(false);
+    const [shouldRedirect, setShouldRedirect] = useState(false);
+    const navigate = useNavigate();
+    const joinAttemptedRef = useRef(false);
+
+    // useEffect for connection logic remains the same
+    useEffect(() => {
+        let isMounted = true;
+        
+        const connectToRoom = async () => {
+            console.log("GameRoom: Checking room connection. URL:", roomId, "Context:", roomCode);
+            
+            if (!roomId) {
+                console.error("No roomId in URL parameters");
+                if (isMounted) setShouldRedirect(true);
+                return;
+            }
+            
+            if (roomCode === roomId) {
+                console.log("Already in the correct room");
+                if (isMounted) setIsLoading(false);
+                return;
+            }
+            
+            if (joinAttemptedRef.current) return;
+            joinAttemptedRef.current = true;
+            
+            console.log("Attempting to join room:", roomId);
+            if (isMounted) setIsJoining(true);
+            
+            try {
+                const success = await joinRoom(roomId);
+                if (success) {
+                    console.log("Successfully joined room:", roomId);
+                    if (isMounted) setIsLoading(false);
+                } else {
+                    console.error("Failed to join room:", roomId);
+                    toast.error("Failed to join room");
+                    if (isMounted) setShouldRedirect(true);
+                }
+            } catch (error) {
+                console.error("Error joining room:", error);
+                toast.error("Failed to join room");
+                if (isMounted) setShouldRedirect(true);
+            } finally {
+                if (isMounted) setIsJoining(false);
+            }
+        };
+        
+        connectToRoom();
+        
+        return () => { isMounted = false; };
+    }, [roomId, roomCode, joinRoom, navigate]);
+
+
+    if (shouldRedirect) {
+        return <Navigate to="/race" />;
+    }
+
+    // Loading UI remains the same
+    if (isLoading || isJoining || isConnecting) {
+        return (
+            <div className="min-h-screen bg-[#0f0f1a] text-white flex items-center justify-center">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-[#1efaf3] border-solid mx-auto mb-4"></div>
+                    <h2 className="text-xl">
+                        {isJoining ? `Joining room ${roomId}...` : 
+                         isConnecting ? "Establishing connection..." : 
+                         "Loading game room..."}
+                    </h2>
+                </div>
+            </div>
+        );
+    }
+    
+    // Redirect check remains the same
+    if (!roomCode || roomCode !== roomId) {
+        console.log("Redirecting: Room code mismatch or missing.", {context: roomCode, url: roomId});
+        return <Navigate to="/race" />;
+    }
+
+    // Render GameLobbyUI or RaceGame based on gameStarted state
+    return gameStarted ? <RaceGame /> : <GameLobbyUI />; 
 }
