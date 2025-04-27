@@ -75,10 +75,10 @@ const GameLobbyUI = () => {
     // Determine if user can interact with buttons
     const canInteract = !isProcessing;
     // Host can start if game is created (status 1 or 2), enough players, and all are ready
-    const canStartGame = isHost && 
-                         players.length >= 2 && 
-                         players.every(p => p.ready) && 
-                         (onChainGameStatus === 2 || (singlePlayerMode && onChainGameStatus === 0)); // Allow start in test mode immediately
+    const canStartGame = isHost &&
+                            players.length >= 2 && // Ensure minimum players (host + bot)
+                            players.every(p => p.ready) && // Ensure host and bots are ready
+                            (onChainGameStatus === 2 || players.some(p => p.isBot)); // Allow start if on chain OR if bots are present
 
     return (
         <div className="min-h-screen bg-[#0f0f1a] text-white flex flex-col">

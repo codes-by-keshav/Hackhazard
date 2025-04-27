@@ -6,6 +6,7 @@ import {
     subscribeToRoom, leaveGameRoom, setupDisconnect, checkRoomExists
 } from '../services/firebase';
 
+
 // --- Helper Functions (Outside Component) ---
 const generateGameId = (roomCode) => {
     const salt = Math.random().toString(36).substring(2, 15);
@@ -530,7 +531,8 @@ export const RaceProvider = ({ children }) => {
                 color: getRandomNeonColor(),
                 hasStakedLocally: false,
                 signature: null,
-                isBot: false
+                isBot: false,
+                isHost: true // Mark as host explicitly here too
             };
 
             // Create room in Firebase
@@ -550,7 +552,7 @@ export const RaceProvider = ({ children }) => {
             setRoomCode(newRoomCode);
             setGameId(newGameId);
             setIsHost(true);
-            // setPlayers([{ ...hostPlayer, address: walletAddress }]);
+            setPlayers([{ ...hostPlayer, address: walletAddress }]);
 
             // Subscribe to room updates
             if (roomSubscriptionRef.current) roomSubscriptionRef.current(); // Unsubscribe old one if any
@@ -572,7 +574,7 @@ export const RaceProvider = ({ children }) => {
            }
            return null;
         }
-    }, [walletAddress, roomCode, handleRoomUpdate]);
+    }, [walletAddress, roomCode, handleRoomUpdate, setPlayers]);
 
     const joinRoom = useCallback(async (code) => {
         if (!walletAddress) {
@@ -701,29 +703,54 @@ export const RaceProvider = ({ children }) => {
                 return;
             }
         }
+        const involvesBots = players.some(p => p.isBot);
+        if (ready && !involvesBots) {
+            const currentStake = parseFloat(stakeAmount);
+            if (isNaN(currentStake) || currentStake <= 0) {
+                toast.warn("Stake amount must be set to a value greater than 0 before readying up for an on-chain game.");
+                return;
+            }
+        } else if (ready && involvesBots) {
+             // For bot games, we don't need a stake amount check here.
+             // Host just needs to be ready.
+        }
 
         // Update local state first for responsiveness
         setIsReady(ready);
+        setPlayers(prevPlayers => // Update the 'players' array immediately
+            prevPlayers.map(player =>
+                player.address.toLowerCase() === walletAddress.toLowerCase()
+                    ? { ...player, ready: ready } // Update the ready status for the current user in the list
+                    : player
+            )
+        );
 
         // Update Firebase
         try {
             await updatePlayerData(roomCode, walletAddress, { ready });
 
             // If host is readying up, potentially create game on chain
-            if (ready && isHost && onChainGameStatus === 0) {
+            if (ready && isHost && !involvesBots && onChainGameStatus === 0) {
                 await callCreateGame();
             }
 
             // If player is readying up and game exists, stake
-            if (ready && onChainGameStatus === 1) {
+            else if (ready && !isHost && onChainGameStatus === 1) {
                 await callStakeRef.current?.();
-            }
+           }
         } catch (error) {
             console.error("Error updating ready state:", error);
             toast.error("Failed to update ready state.");
 
             // Revert local state
             setIsReady(!ready);
+            setPlayers(prevPlayers =>
+                prevPlayers.map(player =>
+                    player.address.toLowerCase() === walletAddress.toLowerCase()
+                        ? { ...player, ready: !ready } // Revert the ready status in the list
+                        : player
+                )
+            );
         }
     }, [isProcessing, stakeAmount, onChainGameStatus, isHost, walletAddress, roomCode, callCreateGame]);
 
@@ -734,24 +761,42 @@ export const RaceProvider = ({ children }) => {
             return;
         }
 
-        const botAddress = `0xBot${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
+        let randomHex = Array(40).fill(0).map(() => Math.floor(Math.random() * 16).toString(16)).join('');
+        const botAddress = `0x${randomHex}`;
+        if (players.some(p => p.address.toLowerCase() === botAddress.toLowerCase())) {
+            console.warn("Generated bot address collision, trying again...");
+            // Optionally retry or handle differently
+            addBotPlayer(); // Simple retry
+            return;
+        }
+        console.log("Adding bot with address:", botAddress);
+
         const newBot = {
             address: botAddress,
-            ready: true,
+            ready: true, // Bots are always ready
             color: getRandomNeonColor(),
             isBot: true,
-            hasStakedLocally: true,
-            signature: null
+            hasStakedLocally: true, // Bots don't interact with contract
+            signature: null,
+            isHost: false // Bots are never hosts
         };
 
         // Add directly to Firebase - the subscription will update local state
         if (roomCode) {
-            updatePlayerData(roomCode, botAddress, newBot).catch(err => {
+            updatePlayerData(roomCode, botAddress, newBot).then(() => {
+                toast.info("Bot added!");
+                // --- Add this line to update local state immediately ---
+                setPlayers(prevPlayers => [...prevPlayers, newBot]);
+                // -------------------------------------------------------
+            }).catch(err => {
                 console.error("Error adding bot:", err);
                 toast.error("Failed to add bot player.");
             });
+        } else {
+            toast.error("Cannot add bot: Not in a room.");
         }
-    }, [isHost, players.length, roomCode]);
+    // Add toast as dependency if not already implicitly included by ESLint rules
+    }, [isHost, players, roomCode, setPlayers]);
 
     const startGame = useCallback(() => {
         if (gameStarted || !isHost) return;

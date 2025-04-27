@@ -74,27 +74,23 @@ export const subscribeToRoom = (roomCode, callback) => {
     
     // Attach the listener
     const unsubscribe = onValue(roomRef, (snapshot) => {
-      console.log(`[Firebase Service] onValue triggered for room: ${roomCode}`); // Add this log
+      // *** THIS LOG IS CRITICAL ***
+      console.log(`%c [Firebase Service] onValue EVENT RECEIVED for rooms/${roomCode}`, 'color: green; font-weight: bold;'); 
       const roomData = snapshot.val();
-      console.log(`[Firebase Service] Data received:`, roomData); // Log the raw data
-      if (roomData && roomData.players) {
-        console.log(`[Firebase Service] Players in room:`, Object.keys(roomData.players).length);
-      }
+      console.log(`[Firebase Service] Raw data from snapshot:`, roomData);
+      
       try {
-        console.log(`[Firebase Service] Calling the context callback function...`);
-        callback(roomData); 
-        console.log(`[Firebase Service] Context callback function finished.`);
-    } catch (error) {
-        // Log any error that happens INSIDE the RaceContext callback
-        console.error(`[Firebase Service] Error executing context callback:`, error);
-    }
-
-  }, (error) => {
-      console.error(`[Firebase Service] Error attaching onValue listener to rooms/${roomCode}:`, error);
-      toast.error(`Listener error: ${error.message}`);
-      // Optionally call callback with null on error
-      // callback(null); 
-  });
+          console.log(`[Firebase Service] Calling the context callback function...`);
+          callback(roomData); // This should trigger handleRoomUpdate
+          console.log(`[Firebase Service] Context callback function finished.`);
+      } catch (error) {
+          console.error(`[Firebase Service] Error executing context callback:`, error);
+      }
+  
+    }, (error) => {
+        console.error(`[Firebase Service] Error attaching onValue listener to rooms/${roomCode}:`, error);
+        // toast.error(`Listener error: ${error.message}`); // Optional: uncomment toast if needed
+    });
     
     // Return the unsubscribe function provided by onValue
     console.log(`[Firebase Service] onValue listener attached for rooms/${roomCode}. Returning unsubscribe function.`);

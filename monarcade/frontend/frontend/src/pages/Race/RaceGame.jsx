@@ -652,7 +652,7 @@ export default function RaceGame() {
         const trackCenterRadius = (trackData.innerRadius + trackData.outerRadius) / 2;
         const startAngle = -Math.PI / 2; // 12 o'clock
         const angleSpread = Math.PI / 12;
-        cars.forEach((car) => {
+        cars.forEach((car, idx) => {
             const angle = startAngle + (idx - (cars.length - 1) / 2) * angleSpread / cars.length;
             car.x = trackData.center.x + Math.cos(angle) * trackCenterRadius;
             car.y = trackData.center.y + Math.sin(angle) * trackCenterRadius;
