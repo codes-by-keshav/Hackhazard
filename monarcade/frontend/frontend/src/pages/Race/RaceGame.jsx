@@ -545,7 +545,7 @@ import { useNavigate } from 'react-router-dom';
 import { useRaceContext } from '../../context/RaceContext';
 import useGameControls from '../../hooks/useGameControls'; // Hook returns a mutable global object
 import Track from './components/Track';
-import Car from './components/car';
+import Car from './components/Car';
 import GameControls from './components/GameControls';
 import { normalizeAngle, calculateAngle } from '../../utils/raceUtils';
 
