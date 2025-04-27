@@ -25,8 +25,8 @@ Monarcade merges Web3 and gaming, creating a competitive ecosystem where skills 
 **Team Monarcade**
 
 ### Team Members:  
-- Keshav Anand Verma ([GitHub](https://github.com/codes-by-keshav) / [LinkedIn](https://www.linkedin.com/in/keshav-av/) / Lead Developer)  
-- Yatin Lahiri ([GitHub](https://github.com/lahiriyatin) / [LinkedIn](https://www.linkedin.com/in/lahiriyatin/) / Blockchain Engineer)
+- Keshav Anand Verma ([GitHub](https://github.com/codes-by-keshav) / [LinkedIn](https://www.linkedin.com/in/keshav-av/))  
+- Yatin Lahiri ([GitHub](https://github.com/lahiriyatin) / [LinkedIn](https://www.linkedin.com/in/lahiriyatin/))
 
 ### Your Approach:  
 - Chose this problem to create a Web3 gaming experience with transparent rewards.
