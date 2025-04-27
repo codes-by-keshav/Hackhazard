@@ -9,7 +9,7 @@
 
 ## 📌 Problem Statement
 
-**Problem Statement 7 – Transform the Future of Gaming**
+**Problem Statement 2 - Unleash blockchain gameplay with Monad**
 
 ---
 
