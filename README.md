@@ -13,8 +13,8 @@
 
 ## 📺 Demo Video & Pitch Deck
 
-🎥 [YouTube Demo Video](#) *(Coming soon!)*  
-📑 [Pitch Deck (PPT)](#) *(Coming soon!)*
+🎥 [YouTube Demo Video](#) 
+📑 [Pitch Deck (PPT)](#)
 
 ---
 
@@ -120,8 +120,8 @@ npm run dev
 
 | Name | GitHub | LinkedIn |
 |:----|:-------|:---------|
-| [Keshav Anand Verma] | [GitHub Profile](https://github.com/codes-by-keshav) | [LinkedIn Profile](https://www.linkedin.com/in/keshav-av/) |
-| [Yatin Lahiri] | [GitHub Profile](https://github.com/lahiriyatin) | [LinkedIn Profile](https://www.linkedin.com/in/lahiriyatin/) |
+| Keshav Anand Verma | [GitHub Profile](https://github.com/codes-by-keshav) | [LinkedIn Profile](https://www.linkedin.com/in/keshav-av/) |
+| Yatin Lahiri | [GitHub Profile](https://github.com/lahiriyatin) | [LinkedIn Profile](https://www.linkedin.com/in/lahiriyatin/) |
 
 ---
 
