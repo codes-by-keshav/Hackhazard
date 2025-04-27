@@ -1,141 +1,120 @@
-# 🎮 Monarcade
+![github-submission-banner](https://github.com/user-attachments/assets/a1493b84-e4e2-456e-a791-ce35ee2bcf2f)
+
+# 🚀 Monarcade
 
 > Built with 🔥 at **Hackhazard 2025**  
 > Powered by the unstoppable **Monad** Blockchain 🚀
 
 ---
 
-## 🌐 Live Link
+## 📌 Problem Statement
 
-🚀 [**Play Monarcade Live!**](https://monarcade.vercel.app/)
-
----
-
-## 📺 Demo Video & Pitch Deck
-
-🎥 [YouTube Demo Video](#) 
-📑 [Pitch Deck (PPT)](#)
+**Problem Statement 7 – Transform the Future of Gaming**
 
 ---
 
-## 🕹️ About Monarcade
+## 🎯 Objective
 
-Welcome to **Monarcade**, the ultimate Web3 gaming universe where skills rule and the **winner takes all**!  
-Forget boring, traditional games — we’ve blended the magic of gaming with the raw power of the **Monad Layer-1 Blockchain** to bring you **next-level competitive fun**.
-
-At Monarcade, **victory isn't just sweet — it's *on-chain* and *rewarded***.
+Monarcade merges Web3 and gaming, creating a competitive ecosystem where skills matter. The project offers fully on-chain games with real-world rewards, leveraging Monad’s high-speed, low-cost blockchain. It serves gamers looking for a more secure and rewarding gaming experience that extends beyond traditional online play.
 
 ---
 
-## 🏎️ Featured Games
+## 🧠 Team & Approach
 
-- 🏁 **Car Racing** — Burn virtual rubber on a blockchain-backed racetrack!
-- 🃏 **UNO** — Play the classic with friends, but with Web3 twists.
-- 🤥 **Bluff** — Outsmart your opponents, stake your wins!
+### Team Name:  
+**Team Monarcade**
 
-**One rule to remember:**  
-> 🥇 **Winner takes it all!**
+### Team Members:  
+- Keshav Anand Verma ([GitHub](https://github.com/codes-by-keshav) / [LinkedIn](https://www.linkedin.com/in/keshav-av/) / Lead Developer)  
+- Yatin Lahiri ([GitHub](https://github.com/lahiriyatin) / [LinkedIn](https://www.linkedin.com/in/lahiriyatin/) / Blockchain Engineer)
 
----
-
-## 🚀 Why Monad?
-
-Because we don't just play — we **PLAY TO WIN**, and Monad gets it.  
-- **Lightning-fast transaction speeds** ⚡ (no more lag ruining your epic moments)
-- **Minimal gas fees** 🛢️ (because we prefer investing in wins, not transactions)
-- **Enterprise-grade security** 🔒 (sleep peacefully knowing your victories are safe)
-- **Massive scalability** 🌍 (more players, more fun, zero compromises)
-
-Shoutout to the Monad team for not just dreaming about the *future of blockchain gaming* but actually **building it**. 🙌
-  
-> 🧡 _Monad isn't just a blockchain; it's a movement. And we're proud to ride that wave._
+### Your Approach:  
+- Chose this problem to create a Web3 gaming experience with transparent rewards.
+- Overcame challenges like minimizing transaction costs while ensuring security.
+- Brainstormed innovative on-chain game mechanics and decided on Monad for scalability.
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Tech | Purpose |
-|:----|:--------|
-| **Frontend** | React.js, TailwindCSS |
-| **Smart Contracts** | Solidity (optimized for Monad) |
-| **Blockchain Integration** | ethers.js |
-| **Backend** | Node.js, Express.js |
-| **Authentication** | MetaMask Wallet Connect |
-| **Hosting** | Vercel, IPFS |
+### Core Technologies Used:
+- **Frontend**: React.js, TailwindCSS
+- **Smart Contracts**: Solidity (optimized for Monad)
+- **Blockchain Integration**: ethers.js
+- **Backend**: Node.js, Express.js
+- **Authentication**: MetaMask Wallet Connect
+- **Hosting**: Vercel, IPFS
+
+### Sponsor Technologies Used (if any):
+- [ ] **Groq:** _How you used Groq_
+- [x] **Monad:** _Your blockchain implementation_
+- [ ] **Fluvio:** _Real-time data handling_
+- [ ] **Base:** _AgentKit / OnchainKit / Smart Wallet usage_
+- [ ] **Screenpipe:** _Screen-based analytics or workflows_
+- [ ] **Stellar:** _Payments, identity, or token usage_
 
 ---
 
-## 🧩 Smart Contract
+## ✨ Key Features
 
-- **Deployed Address**: `0x0dfFacfEB3B20a64A90EdD175494367c6Ce1e866`
-- **Network**: Monad Testnet
+Highlight the most important features of your project:
 
-*(No need to deploy — already live and running!)*
+- ✅ **Fully On-Chain Games** — Play directly from your wallet.
+- ✅ **Automatic Winner Detection** — Smart contracts handle scoring & payouts.
+- ✅ **Immutable Leaderboards** — No more cheaters.
+- ✅ **Seamless Multiplayer Experience** — Invite your gang, flex your skills.
+- ✅ **Wallet-based Entry & Prizes** — Real Web3 economics, real stakes.
 
 ---
 
-## ⚙️ Setup Instructions
+## 📽️ Demo & Deliverables
 
-Want to run Monarcade locally? It's easier than winning at Bluff. Here's how:
+- **Demo Video Link:** [YouTube Demo Video](#)
+- **Pitch Deck / PPT Link:** [Pitch Deck (PPT)](#)
 
-### 1. Clone the repository
+---
 
+## ✅ Tasks & Bonus Checklist
+
+- ✅ **All members of the team completed the mandatory task - Followed at least 2 of our social channels and filled the form** (Details in Participant Manual)  
+- ✅ **All members of the team completed Bonus Task 1 - Sharing of Badges and filled the form (2 points)**  (Details in Participant Manual)
+- ✅ **All members of the team completed Bonus Task 2 - Signing up for Sprint.dev and filled the form (3 points)**  (Details in Participant Manual)
+
+---
+
+## 🧪 How to Run the Project
+
+### Requirements:
+- Node.js
+- MetaMask wallet setup
+- Monad Testnet
+
+### Local Setup:
 ```bash
+# Clone the repo
 git clone https://github.com/codes-by-keshav/Hackhazard.git
 cd Hackhazard/monarcade/frontend/frontend
-```
 
-### 2. Install dependencies
-
-```bash
+# Install dependencies
 npm install
-```
 
-### 4. Start the development server
-
-```bash
+# Start development server
 npm run dev
 ```
+### Future Enhancements:
+- 📈 More Game Integrations — Add new blockchain games.
+- 🛡️ Security Enhancements — Improve on-chain transaction security.
+- 🌐 Localization — Expand support for multiple languages.
 
-### 5. Connect your MetaMask wallet
+.
 
-- Add Monad Network manually in MetaMask (if not already added).
-- Switch your wallet to Monad Testnet.
-- Click on Connect Wallet button and start playing.
+### 📎 Resources / Credits
+- APIs datasets used: Monad Testnet API, ethers.js library
 
----
+- Open-source libraries or tools referenced: React, TailwindCSS, Solidity
 
+- Acknowledgements: Namespace & Monad team for their exceptional support throughout the hackathon.
 
-## ✨ Major Features
+### 🏁 Final Words
+- Monarcade is our vision for the future of Web3 gaming. We’ve overcome technical and design challenges to create an experience that combines entertainment, security, and real-world rewards. We’re excited to bring this project to life and continuously improve it with new features. Thanks to the Hackhazard community for the inspiration!
 
-- 🎮 **Fully On-Chain Games** — Play directly from your wallet.
-- 🏆 **Automatic Winner Detection** — Smart contracts handle scoring & payouts!
-- 🛡️ **Immutable Leaderboards** — Cheaters? Never heard of 'em.
-- 🌐 **Seamless Multiplayer Experience** — Invite your gang, flex your skills.
-- 🪙 **Wallet-based Entry & Prizes** — Real Web3 economics, real stakes.
-
----
-
-## 👥 Contributors
-
-| Name | GitHub | LinkedIn |
-|:----|:-------|:---------|
-| Keshav Anand Verma | [GitHub Profile](https://github.com/codes-by-keshav) | [LinkedIn Profile](https://www.linkedin.com/in/keshav-av/) |
-| Yatin Lahiri | [GitHub Profile](https://github.com/lahiriyatin) | [LinkedIn Profile](https://www.linkedin.com/in/lahiriyatin/) |
-
----
-
-## 🚀 Future of Monarcade
-
-This is just the beginning.  
-We envision a full-fledged **Web3 Arcade Universe** with:
-- Tournaments 🏆
-- NFT Skins 🎨
-- DAO Governance 🧠
-- Marketplace for Power-ups 🛒
-
-Stay tuned... 🛸
-
----
-
-> 🏁 **Built to win. Built on Monad. Built at Hackhazard.**
